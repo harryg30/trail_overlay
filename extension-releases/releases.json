@@ -1,12 +1,47 @@
 {
   "latest": {
-    "version": "1.0.0",
-    "file": "v1.0.0/trail-overlay-for-strava-v1.0.0.zip",
-    "sizeBytes": 30275,
-    "sha256": "11a1e6c28ab27235fe69cd71b1468864b47882868a6f2fdd14561541679d4fe9",
-    "createdAt": "2026-04-15T16:13:16.153Z"
+    "chrome": {
+      "version": "1.0.2",
+      "target": "chrome",
+      "file": "v1.0.2/trail-overlay-for-strava-chrome-v1.0.2.zip",
+      "sizeBytes": 47898,
+      "sha256": "9ec25e942fc779b7d2df27684eba4097e4531f2d82f7458c57f88c3dfca7d385",
+      "createdAt": "2026-04-21T22:29:54.848Z"
+    },
+    "firefox": {
+      "version": "1.0.2",
+      "target": "firefox",
+      "file": "v1.0.2/trail-overlay-for-strava-firefox-v1.0.2.zip",
+      "sizeBytes": 47954,
+      "sha256": "e47fcce4bcca2b1fc0e9abb7c105b8cf2131596b9d669978caef644f7634d513",
+      "createdAt": "2026-04-21T22:29:54.891Z"
+    },
+    "version": "1.0.2",
+    "createdAt": "2026-04-21T22:29:54.893Z"
   },
   "releases": [
+    {
+      "version": "1.0.2",
+      "targets": {
+        "chrome": {
+          "version": "1.0.2",
+          "target": "chrome",
+          "file": "v1.0.2/trail-overlay-for-strava-chrome-v1.0.2.zip",
+          "sizeBytes": 47898,
+          "sha256": "9ec25e942fc779b7d2df27684eba4097e4531f2d82f7458c57f88c3dfca7d385",
+          "createdAt": "2026-04-21T22:29:54.848Z"
+        },
+        "firefox": {
+          "version": "1.0.2",
+          "target": "firefox",
+          "file": "v1.0.2/trail-overlay-for-strava-firefox-v1.0.2.zip",
+          "sizeBytes": 47954,
+          "sha256": "e47fcce4bcca2b1fc0e9abb7c105b8cf2131596b9d669978caef644f7634d513",
+          "createdAt": "2026-04-21T22:29:54.891Z"
+        }
+      },
+      "createdAt": "2026-04-21T22:29:54.893Z"
+    },
     {
       "version": "1.0.0",
       "file": "v1.0.0/trail-overlay-for-strava-v1.0.0.zip",
