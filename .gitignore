@@ -45,6 +45,7 @@ next-env.d.ts
 
 # extension release artifacts
 extension-releases/**/*.zip
+extension-build/
 
 # claude/cursor settings
 .cursor/

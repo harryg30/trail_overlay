@@ -2,7 +2,7 @@
 // Strava uses Mapbox GL JS (not Leaflet). Adds trail polylines via addSource/addLayer.
 // Coordinates: DB stores [lat, lng]; Mapbox requires [lng, lat].
 
-const DEFAULT_API_URL = "http://localhost:3000";
+const DEFAULT_API_URL = "https://trail-overlay.vercel.app";
 const SOURCE_ID = "trail-overlay";
 const LAYER_ID = "trail-overlay-lines";
 /** Wider stroke under main line when `bookmarked` feature-state is true (color from extension settings). */
@@ -334,6 +334,169 @@ function isMapboxLikeMap(v) {
   );
 }
 
+let lastReactMapProbeMs = 0;
+const REACT_MAP_PROBE_INTERVAL_MS = 1500;
+
+function hasReactInternals(el) {
+  if (!el) return false;
+  for (const key of Object.getOwnPropertyNames(el)) {
+    if (
+      key.startsWith("__reactFiber$") ||
+      key.startsWith("__reactProps$") ||
+      key.startsWith("__reactContainer$")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectReactRootsAroundElement(el, maxDepth = 4) {
+  const roots = [];
+  let cur = el;
+  let depth = 0;
+  while (cur && depth <= maxDepth) {
+    for (const key of Object.getOwnPropertyNames(cur)) {
+      if (
+        key.startsWith("__reactFiber$") ||
+        key.startsWith("__reactContainer$")
+      ) {
+        try {
+          const root = cur[key];
+          if (root && (typeof root === "object" || typeof root === "function")) {
+            roots.push(root);
+          }
+        } catch (_) {}
+      }
+    }
+    cur = cur.parentElement;
+    depth += 1;
+  }
+  return roots;
+}
+
+function findMapInObjectGraph(roots, maxNodes = 6000) {
+  if (!roots || roots.length === 0) return null;
+
+  const queue = roots.slice();
+  const seen = new Set();
+  let visited = 0;
+
+  while (queue.length > 0 && visited < maxNodes) {
+    const node = queue.shift();
+    if (!node || (typeof node !== "object" && typeof node !== "function")) {
+      continue;
+    }
+    if (seen.has(node)) continue;
+    seen.add(node);
+    visited += 1;
+
+    if (isMapboxLikeMap(node)) return node;
+
+    const keys = Object.getOwnPropertyNames(node);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (key === "ownerDocument" || key === "parentNode" || key === "window") {
+        continue;
+      }
+      let value;
+      try {
+        value = node[key];
+      } catch (_) {
+        continue;
+      }
+      if (!value || (typeof value !== "object" && typeof value !== "function")) {
+        continue;
+      }
+      if (value === window || value === document) continue;
+      if (!seen.has(value)) queue.push(value);
+    }
+  }
+
+  return null;
+}
+
+function findMapViaReactInternals(containers) {
+  for (const container of containers) {
+    const roots = collectReactRootsAroundElement(container);
+    const found = findMapInObjectGraph(roots);
+    if (found) {
+      console.debug("[TrailOverlay] Map found via React internals probe");
+      return found;
+    }
+  }
+  return null;
+}
+
+function findMapOnContainer(container) {
+  if (!container) return null;
+
+  const directCandidates = [
+    container._mapboxgl_map,
+    container._maplibregl_map,
+    container.__trailOverlayMap,
+    container.__map,
+    container.map
+  ];
+  for (const c of directCandidates) {
+    if (isMapboxLikeMap(c)) return c;
+  }
+
+  // Some bundles attach map refs as non-standard expando props on the container.
+  for (const key of Object.getOwnPropertyNames(container)) {
+    if (key === "style") continue;
+    try {
+      const v = container[key];
+      if (isMapboxLikeMap(v)) {
+        return v;
+      }
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+function findMapInWindowContext(win) {
+  if (!win) return null;
+
+  try {
+    if (isMapboxLikeMap(win.vv_map)) return win.vv_map;
+    if (isMapboxLikeMap(win._trailOverlayMap)) return win._trailOverlayMap;
+    if (isMapboxLikeMap(win.__map)) return win.__map;
+
+    const doc = win.document;
+    if (doc) {
+      const containers = doc.querySelectorAll(".mapboxgl-map, .maplibregl-map");
+      for (const container of containers) {
+        const found = findMapOnContainer(container);
+        if (found) return found;
+      }
+    }
+
+    const pv = win.pageView;
+    if (pv) {
+      const m =
+        pv.map?.() || pv.mapContext?.()?.map?.() || pv.activity?.()?.map?.();
+      if (m && typeof m.addLayer === "function") return m;
+    }
+  } catch (_) {}
+
+  return null;
+}
+
+function findMapInSameOriginFrames() {
+  for (let i = 0; i < window.frames.length; i++) {
+    try {
+      const fw = window.frames[i];
+      const found = findMapInWindowContext(fw);
+      if (found) return found;
+    } catch (_) {
+      // Cross-origin frame access can throw; ignore and continue.
+    }
+  }
+  return null;
+}
+
 function tryFindMap() {
   // Strava route builder exposes the live map here; prefer it over an older captured instance.
   if (isMapboxLikeMap(window.vv_map)) {
@@ -342,8 +505,24 @@ function tryFindMap() {
 
   if (isMapboxLikeMap(window._trailOverlayMap)) return window._trailOverlayMap;
 
-  const mbContainer = document.querySelector(".mapboxgl-map");
-  if (mbContainer?._mapboxgl_map) return mbContainer._mapboxgl_map;
+  if (isMapboxLikeMap(window.__map)) return window.__map;
+
+  const inCurrentWindow = findMapInWindowContext(window);
+  if (inCurrentWindow) return inCurrentWindow;
+
+  const inFrames = findMapInSameOriginFrames();
+  if (inFrames) return inFrames;
+
+  const now = Date.now();
+  if (now - lastReactMapProbeMs >= REACT_MAP_PROBE_INTERVAL_MS) {
+    lastReactMapProbeMs = now;
+    const containers = document.querySelectorAll(".mapboxgl-map, .maplibregl-map");
+    const foundViaReact = findMapViaReactInternals(containers);
+    if (foundViaReact) {
+      window._trailOverlayMap = foundViaReact;
+      return foundViaReact;
+    }
+  }
 
   try {
     const pv = window.pageView;
@@ -366,30 +545,168 @@ function tryFindMap() {
   return null;
 }
 
-function waitForMap(timeoutMs = 15000) {
+function getMapDetectionSnapshot() {
+  const mapboxContainer = document.querySelector(".mapboxgl-map");
+  const maplibreContainer = document.querySelector(".maplibregl-map");
+  const container = mapboxContainer || maplibreContainer;
+  let accessibleFrameCount = 0;
+  let crossOriginFrameCount = 0;
+  let frameMapboxContainerCount = 0;
+  let frameMaplibreContainerCount = 0;
+
+  for (let i = 0; i < window.frames.length; i++) {
+    try {
+      const fw = window.frames[i];
+      const fdoc = fw.document;
+      accessibleFrameCount += 1;
+      if (fdoc) {
+        frameMapboxContainerCount += fdoc.querySelectorAll(".mapboxgl-map").length;
+        frameMaplibreContainerCount += fdoc.querySelectorAll(".maplibregl-map").length;
+      }
+    } catch (_) {
+      crossOriginFrameCount += 1;
+    }
+  }
+
+  return {
+    href: window.location?.href || "",
+    readyState: document.readyState,
+    inIframe: window.top !== window,
+    hasVvMap: isMapboxLikeMap(window.vv_map),
+    hasCapturedMap: isMapboxLikeMap(window._trailOverlayMap),
+    hasWindowMapboxgl: !!window.mapboxgl,
+    hasWindowMaplibregl: !!window.maplibregl,
+    hasMapContainer: !!container,
+    hasReactInternalsOnContainer: hasReactInternals(container),
+    mapboxContainerCount: document.querySelectorAll(".mapboxgl-map").length,
+    maplibreContainerCount: document.querySelectorAll(".maplibregl-map").length,
+    containerHasMapRef: !!container?._mapboxgl_map,
+    frameCount: window.frames.length,
+    accessibleFrameCount,
+    crossOriginFrameCount,
+    frameMapboxContainerCount,
+    frameMaplibreContainerCount,
+    userAgent: navigator.userAgent
+  };
+}
+
+function snapshotToInlineString(snapshot) {
+  return [
+    `ready=${snapshot.readyState}`,
+    `iframe=${snapshot.inIframe}`,
+    `vv=${snapshot.hasVvMap}`,
+    `captured=${snapshot.hasCapturedMap}`,
+    `mapboxgl=${snapshot.hasWindowMapboxgl}`,
+    `maplibregl=${snapshot.hasWindowMaplibregl}`,
+    `containers=${snapshot.mapboxContainerCount}/${snapshot.maplibreContainerCount}`,
+    `reactOnContainer=${snapshot.hasReactInternalsOnContainer}`,
+    `containerRef=${snapshot.containerHasMapRef}`,
+    `frames=${snapshot.frameCount}`,
+    `framesAccessible=${snapshot.accessibleFrameCount}`,
+    `frameContainers=${snapshot.frameMapboxContainerCount}/${snapshot.frameMaplibreContainerCount}`
+  ].join(" ");
+}
+
+function waitForMap(timeoutMs = 60000) {
   return new Promise((resolve, reject) => {
     const existing = tryFindMap();
     if (existing) return resolve(existing);
 
     const deadline = Date.now() + timeoutMs;
+    const start = Date.now();
+    let pollCount = 0;
 
     const poll = setInterval(() => {
+      pollCount += 1;
       const found = tryFindMap();
       if (found) {
         clearInterval(poll);
+        if (pollCount > 1) {
+          console.debug("[TrailOverlay] Map discovered", {
+            polls: pollCount,
+            elapsedMs: Date.now() - start,
+            snapshot: getMapDetectionSnapshot()
+          });
+        }
         resolve(found);
       } else if (Date.now() > deadline) {
         clearInterval(poll);
+        const snapshot = getMapDetectionSnapshot();
+        console.error("[TrailOverlay] Map probe timed out", {
+          timeoutMs,
+          polls: pollCount,
+          elapsedMs: Date.now() - start,
+          snapshot
+        });
+        console.error("[TrailOverlay] Map probe timed out (inline)", snapshotToInlineString(snapshot));
         reject(new Error("Map not found"));
+      } else if (pollCount % 8 === 0) {
+        const snapshot = getMapDetectionSnapshot();
+        console.debug("[TrailOverlay] Waiting for map", {
+          polls: pollCount,
+          elapsedMs: Date.now() - start,
+          snapshot
+        });
+        console.debug("[TrailOverlay] Waiting for map (inline)", snapshotToInlineString(snapshot));
       }
     }, 250);
   });
 }
 
-function waitForStyleLoaded(map) {
-  return new Promise((resolve) => {
-    if (map.isStyleLoaded()) return resolve();
-    map.once("style.load", resolve);
+function waitForStyleLoaded(map, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const startedAt = Date.now();
+    let pollTimer = null;
+    let timeoutTimer = null;
+
+    const finish = (err) => {
+      if (settled) return;
+      settled = true;
+      if (pollTimer) clearInterval(pollTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (err) reject(err);
+      else resolve();
+    };
+
+    const checkLoaded = () => {
+      try {
+        return !!(map && typeof map.isStyleLoaded === "function" && map.isStyleLoaded());
+      } catch (_) {
+        return false;
+      }
+    };
+
+    if (checkLoaded()) {
+      finish();
+      return;
+    }
+
+    pollTimer = setInterval(() => {
+      if (checkLoaded()) {
+        console.debug("[TrailOverlay] Map style became ready via poll", {
+          elapsedMs: Date.now() - startedAt
+        });
+        finish();
+      }
+    }, 250);
+
+    timeoutTimer = setTimeout(() => {
+      finish(new Error("Map style not ready"));
+    }, timeoutMs);
+
+    try {
+      if (typeof map?.once === "function") {
+        map.once("style.load", () => {
+          console.debug("[TrailOverlay] Map style.load event received", {
+            elapsedMs: Date.now() - startedAt
+          });
+          finish();
+        });
+      }
+    } catch (_) {
+      // Keep polling fallback alive.
+    }
   });
 }
 
@@ -3158,6 +3475,486 @@ function applyOverlayPrefsFromMessage(prefs) {
   });
 }
 
+// --- STREET VIEW ---
+
+const STREET_VIEW_PANEL_ID = "trail-overlay-street-view-panel";
+let googleMapsApiKey = "";
+
+async function fetchGoogleMapsApiKeyFromBridge() {
+  return new Promise((resolve) => {
+    const requestId = String(Math.random());
+    const onMessage = (event) => {
+      if (
+        event.data?.type === "GOOGLE_MAPS_API_KEY_RESPONSE" &&
+        event.data?.requestId === requestId
+      ) {
+        window.removeEventListener("message", onMessage);
+        resolve(event.data?.apiKey || "");
+      }
+    };
+    window.addEventListener("message", onMessage);
+    window.postMessage(
+      { type: "GET_GOOGLE_MAPS_API_KEY", requestId, [TO_BRIDGE]: true },
+      "*"
+    );
+    setTimeout(() => {
+      window.removeEventListener("message", onMessage);
+      resolve("");
+    }, 5000);
+  });
+}
+
+function closeStreetViewPanel() {
+  const panel = document.getElementById(STREET_VIEW_PANEL_ID);
+  if (panel && panel.__streetViewPanorama) {
+    panel.__streetViewPanorama = null;
+  }
+  if (panel && panel.__removeStreetViewMarker) {
+    panel.__removeStreetViewMarker();
+  }
+  if (panel && panel.__cleanup) {
+    panel.__cleanup();
+  }
+  if (panel) panel.remove();
+}
+
+function createStreetViewPanel(lat, lng) {
+  closeStreetViewPanel();
+
+  const container = document.querySelector(".mapboxgl-map");
+  if (!container) return;
+
+  const panel = document.createElement("div");
+  panel.id = STREET_VIEW_PANEL_ID;
+  panel.__isExpanded = false;
+
+  const applySize = () => {
+    const isExpanded = panel.__isExpanded;
+    Object.assign(panel.style, {
+    position: "absolute",
+    bottom: "20px",
+    left: "20px",
+    width: isExpanded ? "700px" : "400px",
+    height: isExpanded ? "500px" : "300px",
+    borderRadius: "12px",
+    border: "1px solid rgba(255,255,255,0.2)",
+    background: "rgba(18,18,20,0.95)",
+    boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
+    backdropFilter: "blur(8px)",
+    zIndex: "10000",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    fontFamily:
+      'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, sans-serif',
+    transition: "width 0.2s ease, height 0.2s ease"
+    });
+  };
+  applySize();
+
+  const header = document.createElement("div");
+  Object.assign(header.style, {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "12px 14px",
+    borderBottom: "1px solid rgba(255,255,255,0.1)",
+    flex: "0 0 auto",
+    background: "rgba(0,0,0,0.2)",
+    zIndex: "10001"
+  });
+
+  const title = document.createElement("span");
+  title.textContent = "Street View";
+  Object.assign(title.style, {
+    fontSize: "13px",
+    fontWeight: "600",
+    color: "rgba(244,244,245,0.9)"
+  });
+
+  const expandBtn = document.createElement("button");
+  expandBtn.type = "button";
+  expandBtn.textContent = "⛶";
+  Object.assign(expandBtn.style, {
+    width: "28px",
+    height: "28px",
+    padding: "0",
+    border: "none",
+    background: "none",
+    color: "rgba(244,244,245,0.6)",
+    cursor: "pointer",
+    fontSize: "14px",
+    lineHeight: "26px",
+    marginRight: "4px"
+  });
+  expandBtn.addEventListener("click", () => {
+    panel.__isExpanded = !panel.__isExpanded;
+    expandBtn.textContent = panel.__isExpanded ? "⛶" : "⛶";
+    expandBtn.style.color = panel.__isExpanded
+      ? "rgba(244,244,245,0.9)"
+      : "rgba(244,244,245,0.6)";
+    applySize();
+  });
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.textContent = "×";
+  Object.assign(closeBtn.style, {
+    width: "28px",
+    height: "28px",
+    padding: "0",
+    border: "none",
+    background: "none",
+    color: "rgba(244,244,245,0.6)",
+    cursor: "pointer",
+    fontSize: "20px",
+    lineHeight: "26px"
+  });
+  closeBtn.addEventListener("click", closeStreetViewPanel);
+
+  header.appendChild(title);
+  header.appendChild(expandBtn);
+  header.appendChild(closeBtn);
+
+  const content = document.createElement("div");
+  content.id = "trail-overlay-street-view-panorama";
+  content.className = "trail-overlay-street-view-content";
+  Object.assign(content.style, {
+    flex: "1",
+    minHeight: "0",
+    position: "relative",
+    background: "rgba(0,0,0,0.3)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center"
+  });
+
+  // Placeholder while loading
+  const loading = document.createElement("div");
+  loading.textContent = "Loading Street View...";
+  Object.assign(loading.style, {
+    fontSize: "12px",
+    color: "rgba(244,244,245,0.5)",
+    textAlign: "center"
+  });
+  content.appendChild(loading);
+
+  const footer = document.createElement("div");
+  Object.assign(footer.style, {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "6px 10px",
+    background: "rgba(0,0,0,0.4)",
+    fontSize: "11px",
+    color: "rgba(244,244,245,0.6)",
+    flex: "0 0 auto",
+    backdropFilter: "blur(4px)"
+  });
+  footer.innerHTML = `<span>${lat.toFixed(4)}° ${lng.toFixed(4)}°</span><span style="font-size: 10px; color: rgba(244,244,245,0.4);">drag to pan • scroll to zoom</span>`;
+
+  panel.appendChild(header);
+  panel.appendChild(content);
+  panel.appendChild(footer);
+  container.appendChild(panel);
+
+  // --- DRAG AND RESIZE ---
+  let isDragging = false;
+  let isResizing = false;
+  let dragOffsetX = 0;
+  let dragOffsetY = 0;
+  let resizeStartX = 0;
+  let resizeStartY = 0;
+  let resizeStartWidth = 0;
+  let resizeStartHeight = 0;
+
+  header.style.cursor = "grab";
+  header.addEventListener("mousedown", (e) => {
+    if (e.target === expandBtn || e.target === closeBtn) return;
+    isDragging = true;
+    dragOffsetX = e.clientX - panel.offsetLeft;
+    dragOffsetY = e.clientY - panel.offsetTop;
+    header.style.cursor = "grabbing";
+    e.preventDefault();
+  });
+
+  // Create resize handle
+  const resizeHandle = document.createElement("div");
+  Object.assign(resizeHandle.style, {
+    position: "absolute",
+    bottom: "0",
+    right: "0",
+    width: "16px",
+    height: "16px",
+    cursor: "nwse-resize",
+    background:
+      "linear-gradient(135deg, transparent 50%, rgba(244,244,245,0.3) 50%)",
+    pointerEvents: "auto"
+  });
+  panel.appendChild(resizeHandle);
+
+  resizeHandle.addEventListener("mousedown", (e) => {
+    isResizing = true;
+    resizeStartX = e.clientX;
+    resizeStartY = e.clientY;
+    resizeStartWidth = panel.offsetWidth;
+    resizeStartHeight = panel.offsetHeight;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  const onMouseMove = (e) => {
+    if (isDragging) {
+      const newLeft = e.clientX - dragOffsetX;
+      const newTop = e.clientY - dragOffsetY;
+      panel.style.left = `${Math.max(0, newLeft)}px`;
+      panel.style.bottom = "auto";
+      panel.style.top = `${Math.max(0, newTop)}px`;
+    }
+
+    if (isResizing) {
+      const deltaX = e.clientX - resizeStartX;
+      const deltaY = e.clientY - resizeStartY;
+      const newWidth = Math.max(300, resizeStartWidth + deltaX);
+      const newHeight = Math.max(200, resizeStartHeight + deltaY);
+      panel.style.width = `${newWidth}px`;
+      panel.style.height = `${newHeight}px`;
+      panel.__isExpanded = false;
+    }
+  };
+
+  const onMouseUp = () => {
+    isDragging = false;
+    isResizing = false;
+    header.style.cursor = "grab";
+  };
+
+  document.addEventListener("mousemove", onMouseMove);
+  document.addEventListener("mouseup", onMouseUp);
+
+  // Store cleanup function for when panel closes
+  panel.__cleanup = () => {
+    document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mouseup", onMouseUp);
+  };
+
+  // Load Street View Panorama
+  loadStreetViewPanorama(content, lat, lng, panel);
+
+  return panel;
+}
+
+async function loadStreetViewPanorama(container, lat, lng, panel) {
+  if (!googleMapsApiKey || googleMapsApiKey.trim().length === 0) {
+    container.replaceChildren();
+    const msg = document.createElement("div");
+    msg.textContent = "No API key configured. Add one in extension settings.";
+    Object.assign(msg.style, {
+      fontSize: "12px",
+      color: "rgba(244,244,245,0.6)",
+      textAlign: "center",
+      padding: "16px",
+      lineHeight: "1.4"
+    });
+    container.appendChild(msg);
+    return;
+  }
+
+  try {
+    // Check if Street View is available
+    const metadataUrl = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${lat},${lng}&key=${encodeURIComponent(
+      googleMapsApiKey
+    )}`;
+
+    const metaResponse = await fetch(metadataUrl);
+    const metaData = await metaResponse.json();
+    console.log("[StreetView] Metadata response:", metaData.status);
+
+    if (metaData.status !== "OK" && metaData.status !== "ZERO_RESULTS") {
+      throw new Error(
+        metaData.status === "REQUEST_DENIED"
+          ? "Invalid API key or referrer restrictions"
+          : metaData.status
+      );
+    }
+
+    if (metaData.status === "ZERO_RESULTS") {
+      container.replaceChildren();
+      const msg = document.createElement("div");
+      msg.innerHTML = `No Street View available at this location.<br><span style="font-size: 10px; color: rgba(244,244,245,0.4); margin-top: 6px; display: block;">T-O debug: right click ${lat.toFixed(4)}° ${lng.toFixed(4)}°</span>`;
+      Object.assign(msg.style, {
+        fontSize: "12px",
+        color: "rgba(244,244,245,0.5)",
+        textAlign: "center",
+        padding: "16px",
+        lineHeight: "1.4"
+      });
+      container.appendChild(msg);
+      return;
+    }
+
+    console.log("[StreetView] Loading Maps API...");
+
+    // Load Maps API if not already loaded
+    if (!window.google?.maps?.StreetViewPanorama) {
+      const script = document.createElement("script");
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(
+        googleMapsApiKey
+      )}&libraries=streetview`;
+      script.async = true;
+      script.defer = true;
+
+      await new Promise((resolve, reject) => {
+        script.onload = () => {
+          console.log("[StreetView] Maps API loaded");
+          resolve();
+        };
+        script.onerror = () => {
+          console.error("[StreetView] Maps API load failed");
+          reject(new Error("Failed to load Maps API"));
+        };
+
+        const timeout = setTimeout(() => {
+          if (!window.google?.maps) {
+            reject(new Error("Maps API timeout"));
+          }
+        }, 8000);
+
+        script.onload = () => {
+          clearTimeout(timeout);
+          console.log("[StreetView] Maps API loaded");
+          resolve();
+        };
+
+        document.head.appendChild(script);
+      });
+    }
+
+    // Verify google.maps is available
+    if (!window.google?.maps?.StreetViewPanorama) {
+      throw new Error("Maps API not available after load");
+    }
+
+    console.log("[StreetView] Creating panorama at", lat, lng);
+
+    // Clear and prepare container
+    container.replaceChildren();
+    container.style.background = "#000";
+
+    // Create panorama
+    const panorama = new window.google.maps.StreetViewPanorama(container, {
+      position: { lat, lng },
+      pov: {
+        heading: 0,
+        pitch: 0
+      },
+      zoom: 1,
+      addressControl: false,
+      fullscreenControl: false,
+      motionTrackingControl: false,
+      panControl: true,
+      zoomControl: true
+    });
+
+    panorama.addListener("status_changed", () => {
+      const status = panorama.getStatus();
+      console.log("[StreetView] Panorama status:", status);
+      if (status === "ZERO_RESULTS") {
+        container.replaceChildren();
+        const msg = document.createElement("div");
+        msg.textContent = "No Street View at this location.";
+        Object.assign(msg.style, {
+          fontSize: "12px",
+          color: "rgba(244,244,245,0.5)",
+          textAlign: "center",
+          padding: "16px"
+        });
+        container.appendChild(msg);
+      }
+    });
+
+    // Add marker on Mapbox with heading arrow
+    if (trailOverlayMapRef && isMapboxLikeMap(trailOverlayMapRef)) {
+      const map = trailOverlayMapRef;
+
+      // Create arrow marker element
+      const arrowEl = document.createElement("div");
+      Object.assign(arrowEl.style, {
+        width: "30px",
+        height: "30px",
+        background: "#fc4c02",
+        borderRadius: "50%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: "18px",
+        cursor: "pointer",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
+        border: "2px solid white"
+      });
+      arrowEl.innerHTML = "→";
+
+      const marker = new window.mapboxgl.Marker(arrowEl)
+        .setLngLat([lng, lat])
+        .addTo(map);
+
+      panel.__streetViewMarker = marker;
+      panel.__streetViewArrowEl = arrowEl;
+
+      // Update arrow heading when panorama view changes
+      const updateArrow = () => {
+        const pov = panorama.getPov();
+        if (pov && arrowEl) {
+          arrowEl.style.transform = `rotate(${pov.heading}deg)`;
+        }
+      };
+
+      panorama.addListener("pov_changed", updateArrow);
+      updateArrow(); // Set initial heading
+
+      panel.__removeStreetViewMarker = () => {
+        if (marker) {
+          marker.remove();
+        }
+      };
+    }
+
+    panel.__streetViewPanorama = panorama;
+    console.log("[StreetView] Panorama created successfully");
+  } catch (err) {
+    console.error("[StreetView] Error:", err);
+    container.replaceChildren();
+    const msg = document.createElement("div");
+    const coords = `${lat.toFixed(4)}° ${lng.toFixed(4)}°`;
+    msg.innerHTML = `Error: ${err instanceof Error ? err.message : "Failed to load"}<br><span style="font-size: 10px; color: rgba(244,244,245,0.4); margin-top: 6px; display: block;">T-O debug: right click ${coords}</span>`;
+    Object.assign(msg.style, {
+      fontSize: "11px",
+      color: "rgba(244,244,245,0.5)",
+      textAlign: "center",
+      padding: "16px",
+      lineHeight: "1.4"
+    });
+    container.appendChild(msg);
+  }
+}
+
+function attachStreetViewRightClick(map) {
+  if (!map || map.__trailOverlayStreetViewAttached) return;
+  map.__trailOverlayStreetViewAttached = true;
+
+  map.on("contextmenu", (e) => {
+    if (!googleMapsApiKey || googleMapsApiKey.trim().length === 0) {
+      return;
+    }
+
+    const lngLat = e.lngLat;
+    if (!lngLat) return;
+
+    e.preventDefault();
+    createStreetViewPanel(lngLat.lat, lngLat.lng);
+  });
+}
+
 // --- MAIN EXECUTION ---
 
 let cachedTrails = null;
@@ -3167,25 +3964,95 @@ let cachedNetworks = null;
 let trailOverlayMapRef = null;
 
 let extensionInitLogged = false;
+let mainInFlight = false;
+let mainInFlightSkipCount = 0;
+let mainLastSkipLogAt = 0;
+let mainRetryTimer = null;
+let mainAttemptCounter = 0;
+let mapNotFoundRetryCount = 0;
+
+function logMainStage(attemptId, stage, startedAt, extra = undefined) {
+  console.debug("[TrailOverlay] main() stage", {
+    attemptId,
+    stage,
+    elapsedMs: Date.now() - startedAt,
+    ...(extra || {})
+  });
+}
+
+function scheduleMainRetry(delayMs = 1500) {
+  if (mainRetryTimer != null) return;
+  mainRetryTimer = setTimeout(() => {
+    mainRetryTimer = null;
+    main();
+  }, delayMs);
+}
 
 async function main() {
+  if (mainInFlight) {
+    mainInFlightSkipCount += 1;
+    const now = Date.now();
+    if (now - mainLastSkipLogAt > 5000) {
+      mainLastSkipLogAt = now;
+      console.debug("[TrailOverlay] main() call skipped because initialization is already in flight", {
+        skippedCallsSinceLastLog: mainInFlightSkipCount
+      });
+      mainInFlightSkipCount = 0;
+    }
+    return;
+  }
+  mainInFlight = true;
+  mainInFlightSkipCount = 0;
+  const attemptId = ++mainAttemptCounter;
+  const startedAt = Date.now();
+  console.debug("[TrailOverlay] main() attempt started", {
+    attemptId,
+    url: window.location?.href || "",
+    readyState: document.readyState
+  });
   try {
+    logMainStage(attemptId, "fetch_api_url:start", startedAt);
     await fetchApiUrlFromBridge();
+    logMainStage(attemptId, "fetch_api_url:done", startedAt);
+
+    // Fetch Google Maps API key
+    logMainStage(attemptId, "fetch_google_maps_api_key:start", startedAt);
+    googleMapsApiKey = await fetchGoogleMapsApiKeyFromBridge();
+    logMainStage(attemptId, "fetch_google_maps_api_key:done", startedAt);
 
     if (!cachedTrails || !cachedNetworks) {
+      logMainStage(attemptId, "fetch_trails_networks:start", startedAt);
       [cachedTrails, cachedNetworks] = await Promise.all([
         cachedTrails ?? fetchTrails(),
         cachedNetworks ?? fetchNetworks()
       ]);
+      logMainStage(attemptId, "fetch_trails_networks:done", startedAt, {
+        trails: Array.isArray(cachedTrails) ? cachedTrails.length : -1,
+        networks: Array.isArray(cachedNetworks) ? cachedNetworks.length : -1
+      });
     }
 
+    logMainStage(attemptId, "fetch_bookmarks:start", startedAt);
     const bookmarkIds = await fetchTrailBookmarksFromBridge();
+    logMainStage(attemptId, "fetch_bookmarks:done", startedAt, {
+      bookmarkCount: Array.isArray(bookmarkIds) ? bookmarkIds.length : -1
+    });
     hydrateBookmarksFromIds(bookmarkIds);
 
+    logMainStage(attemptId, "wait_map_and_prefs:start", startedAt);
     const [map, prefs] = await Promise.all([
       waitForMap(),
       fetchOverlayPrefsFromBridge()
     ]);
+    logMainStage(attemptId, "wait_map_and_prefs:done", startedAt);
+    if (mapNotFoundRetryCount > 0) {
+      console.info("[TrailOverlay] Map recovered after retries", {
+        retries: mapNotFoundRetryCount,
+        attemptId,
+        elapsedMs: Date.now() - startedAt
+      });
+      mapNotFoundRetryCount = 0;
+    }
     trailOverlayMapRef = map;
     overlayEnabled = prefs.enabled;
     overlayTrailsVisible = prefs.trailsVisible;
@@ -3196,7 +4063,9 @@ async function main() {
       prefs.bookmarkHighlightColor.trim().length > 0
         ? prefs.bookmarkHighlightColor.trim()
         : DEFAULT_OVERLAY_PREFS.bookmarkHighlightColor;
+    logMainStage(attemptId, "wait_style_loaded:start", startedAt);
     await waitForStyleLoaded(map);
+    logMainStage(attemptId, "wait_style_loaded:done", startedAt);
 
     if (prefs.enabled) {
       applyMapLayersFromPrefs(map, prefs);
@@ -3213,6 +4082,9 @@ async function main() {
         scheduleTrailDockRefresh(map);
       });
     }
+
+    // Attach Street View right-click handler
+    attachStreetViewRightClick(map);
 
     // Inject toggle once per page load (the MutationObserver inside handles re-renders)
     if (!document.getElementById("trail-overlay-toggle-li")) {
@@ -3248,7 +4120,30 @@ async function main() {
       console.log("[TrailOverlay] Initialized");
     }
   } catch (err) {
-    alert("[TrailOverlay ERROR] " + (err instanceof Error ? err.message : String(err)));
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === "Map not found") {
+      mapNotFoundRetryCount += 1;
+      console.warn("[TrailOverlay] Map not found yet, retrying...", {
+        retryCount: mapNotFoundRetryCount,
+        attemptId,
+        elapsedMs: Date.now() - startedAt,
+        nextRetryInMs: 2000,
+        snapshot: getMapDetectionSnapshot()
+      });
+      scheduleMainRetry(2000);
+    } else if (msg === "Map style not ready") {
+      console.warn("[TrailOverlay] Map found but style is not ready yet, retrying...", {
+        attemptId,
+        elapsedMs: Date.now() - startedAt,
+        nextRetryInMs: 1500,
+        snapshot: getMapDetectionSnapshot()
+      });
+      scheduleMainRetry(1500);
+    } else {
+      alert("[TrailOverlay ERROR] " + msg);
+    }
+  } finally {
+    mainInFlight = false;
   }
 }
 

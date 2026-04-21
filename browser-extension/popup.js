@@ -1,4 +1,4 @@
-const DEFAULT_API_URL = 'http://localhost:3000'
+const DEFAULT_API_URL = 'https://trail-overlay.vercel.app'
 
 const PRESET_NAMES = ['yellow', 'red', 'blue', 'green']
 
@@ -42,16 +42,21 @@ document.addEventListener('DOMContentLoaded', () => {
   const showTrailPhotos = document.getElementById('showTrailPhotos')
   const bookmarkHaloPreset = document.getElementById('bookmarkHaloPreset')
   const bookmarkHaloHex = document.getElementById('bookmarkHaloHex')
+  const googleMapsApiKey = document.getElementById('googleMapsApiKey')
+  const validateKeyBtn = document.getElementById('validateKey')
+  const keyStatus = document.getElementById('keyStatus')
 
   const storageDefaults = {
     apiUrl: DEFAULT_API_URL,
     overlayTrailsVisible: true,
     overlayNetworksVisible: true,
     overlayTrailPhotosVisible: true,
-    overlayBookmarkHighlightColor: 'yellow'
+    overlayBookmarkHighlightColor: 'yellow',
+    googleMapsApiKey: ''
   }
 
   let hexSaveTimer = null
+  let validateTimer = null
 
   const syncHexVisibility = () => {
     const isCustom = bookmarkHaloPreset.value === 'custom'
@@ -65,11 +70,66 @@ document.addEventListener('DOMContentLoaded', () => {
     })
   }
 
+  const validateGoogleMapsKey = async (key) => {
+    if (!key || key.trim().length === 0) {
+      keyStatus.textContent = ''
+      return
+    }
+
+    keyStatus.textContent = 'Validating...'
+    validateKeyBtn.disabled = true
+
+    try {
+      // Test with Street View metadata API (free call)
+      const lat = 40.7128
+      const lng = -74.0060
+      const url = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${lat},${lng}&key=${encodeURIComponent(key.trim())}`
+
+      const response = await fetch(url)
+      const data = await response.json()
+
+      if (data.status === 'OK') {
+        keyStatus.textContent = '✓ Valid API key'
+        keyStatus.style.color = '#22c55e'
+        chrome.storage.sync.set({ googleMapsApiKey: key.trim() }, () => {
+          setTimeout(() => {
+            keyStatus.textContent = ''
+            keyStatus.style.color = '#666'
+            validateKeyBtn.disabled = false
+          }, 2000)
+        })
+      } else if (data.status === 'ZERO_RESULTS') {
+        keyStatus.textContent = '✓ Key is valid (no Street View at test location)'
+        keyStatus.style.color = '#22c55e'
+        chrome.storage.sync.set({ googleMapsApiKey: key.trim() }, () => {
+          setTimeout(() => {
+            keyStatus.textContent = ''
+            keyStatus.style.color = '#666'
+            validateKeyBtn.disabled = false
+          }, 2000)
+        })
+      } else if (data.status === 'REQUEST_DENIED') {
+        keyStatus.textContent = '✗ Invalid API key or API not enabled'
+        keyStatus.style.color = '#ef4444'
+        validateKeyBtn.disabled = false
+      } else {
+        keyStatus.textContent = `✗ Error: ${data.status}`
+        keyStatus.style.color = '#ef4444'
+        validateKeyBtn.disabled = false
+      }
+    } catch (err) {
+      keyStatus.textContent = '✗ Error validating key'
+      keyStatus.style.color = '#ef4444'
+      validateKeyBtn.disabled = false
+    }
+  }
+
   chrome.storage.sync.get(storageDefaults, (items) => {
     input.value = items.apiUrl
     showTrails.checked = items.overlayTrailsVisible !== false
     showNetworks.checked = items.overlayNetworksVisible !== false
     showTrailPhotos.checked = items.overlayTrailPhotosVisible !== false
+    googleMapsApiKey.value = items.googleMapsApiKey || ''
 
     const { preset, hex } = classifyHighlight(items.overlayBookmarkHighlightColor)
     bookmarkHaloPreset.value = preset
@@ -103,6 +163,16 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       persist()
     })
+  })
+
+  validateKeyBtn.addEventListener('click', () => {
+    validateGoogleMapsKey(googleMapsApiKey.value)
+  })
+
+  googleMapsApiKey.addEventListener('input', () => {
+    clearTimeout(validateTimer)
+    keyStatus.textContent = ''
+    keyStatus.style.color = '#666'
   })
 
   showTrails.addEventListener('change', () => {

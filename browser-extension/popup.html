@@ -60,7 +60,7 @@
       color: #666;
       line-height: 1.4;
     }
-    select, input[type="text"].hex-field {
+    select, input[type="text"].hex-field, input[type="password"] {
       width: 100%;
       box-sizing: border-box;
       padding: 7px 8px;
@@ -69,7 +69,22 @@
       border-radius: 4px;
       margin-top: 4px;
     }
+    #validateKey {
+      width: auto;
+      padding: 7px 12px;
+      background: #fc4c02;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    #validateKey:hover { background: #e04400; }
+    #validateKey:disabled { background: #ccc; cursor: not-allowed; }
     .field-hint { font-size: 11px; color: #666; margin-top: 6px; line-height: 1.35; }
+    a { color: #fc4c02; text-decoration: none; }
+    a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -78,6 +93,22 @@
   <input id="apiUrl" type="url" placeholder="https://trail-overlay.vercel.app">
   <button id="save">Save</button>
   <div id="status"></div>
+
+  <div class="row-toggle">
+    <h4 class="asset-heading">Google Maps Street View</h4>
+    <label for="googleMapsApiKey">API Key</label>
+    <div style="display: flex; gap: 8px;">
+      <input id="googleMapsApiKey" type="password" placeholder="AIza..." style="flex: 1;">
+      <button id="validateKey" style="width: 100px;">Validate</button>
+    </div>
+    <div id="keyStatus" style="font-size: 12px; margin-top: 8px; min-height: 16px;"></div>
+    <p class="toggle-hint">
+      <strong>Get your free API key:</strong><br>
+      <a id="guideLink" href="https://developers.google.com/maps/documentation/streetview/request-streetview" target="_blank" style="color: #fc4c02; text-decoration: none;">📖 Google Maps API Guide</a> ·
+      <a id="contactLink" href="mailto:support@example.com" style="color: #fc4c02; text-decoration: none;">💬 Contact</a><br>
+      <span style="font-size: 11px; color: #999; margin-top: 4px; display: block;">Right-click roads on the map to view Street View</span>
+    </p>
+  </div>
 
   <div class="row-toggle">
     <h4 class="asset-heading">Map layers</h4>

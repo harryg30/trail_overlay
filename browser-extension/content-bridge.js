@@ -1,10 +1,25 @@
 // ISOLATED world: handles extension APIs + fetching
 
-const DEFAULT_API_URL = "http://localhost:3000";
+const DEFAULT_API_URL = "https://trail-overlay.vercel.app";
 
 /** Envelope so Strava/page postMessage traffic cannot collide with our protocol. */
 const TO_BRIDGE = "__trailOverlayToBridge";
 const FROM_BRIDGE = "__trailOverlayFromBridge";
+
+function injectMainWorldScript(fileName) {
+  const marker = `trail-overlay-injected-${fileName}`;
+  if (document.documentElement?.getAttribute(marker) === "1") return;
+  const script = document.createElement("script");
+  script.src = chrome.runtime.getURL(fileName);
+  script.async = false;
+  script.onload = () => script.remove();
+  (document.head || document.documentElement).appendChild(script);
+  document.documentElement?.setAttribute(marker, "1");
+}
+
+// Firefox MV2 runs content scripts in an isolated context; inject these into page context.
+injectMainWorldScript("content-init.js");
+injectMainWorldScript("content.js");
 
 async function getApiUrl() {
   const items = await chrome.storage.sync.get({ apiUrl: DEFAULT_API_URL });
@@ -424,6 +439,33 @@ window.addEventListener("message", async (event) => {
       { type: "TRAIL_BOOKMARKS_SET", requestId, [FROM_BRIDGE]: true },
       "*"
     );
+    return;
+  }
+
+  if (event.data?.type === "GET_GOOGLE_MAPS_API_KEY") {
+    const requestId = event.data.requestId;
+    try {
+      const items = await chrome.storage.sync.get({ googleMapsApiKey: '' });
+      window.postMessage(
+        {
+          type: "GOOGLE_MAPS_API_KEY_RESPONSE",
+          requestId,
+          apiKey: items.googleMapsApiKey || '',
+          [FROM_BRIDGE]: true
+        },
+        "*"
+      );
+    } catch {
+      window.postMessage(
+        {
+          type: "GOOGLE_MAPS_API_KEY_RESPONSE",
+          requestId,
+          apiKey: '',
+          [FROM_BRIDGE]: true
+        },
+        "*"
+      );
+    }
     return;
   }
 });
