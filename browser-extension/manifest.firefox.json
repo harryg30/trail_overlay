@@ -52,7 +52,11 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "trail-overlay@harry.local",
-      "strict_min_version": "109.0"
+      "strict_min_version": "109.0",
+      "data_collection_permissions": {
+        "required": ["websiteContent", "websiteActivity"],
+        "optional": ["technicalAndInteraction"]
+      }
     }
   }
 }
