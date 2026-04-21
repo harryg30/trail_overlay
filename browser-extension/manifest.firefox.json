@@ -54,7 +54,9 @@
     "gecko": {
       "id": "trail-overlay@harry.local",
       "strict_min_version": "109.0",
-      "data_collection_permissions": {}
+      "data_collection_permissions": {
+        "required": []
+      }
     }
   }
 }
