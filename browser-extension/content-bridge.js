@@ -443,14 +443,21 @@ window.addEventListener("message", async (event) => {
   }
 
   if (event.data?.type === "GET_GOOGLE_MAPS_API_KEY") {
+    if (
+      event.source !== window ||
+      event.data?.requestSource !== "trail-overlay-content"
+    ) {
+      return;
+    }
+
     const requestId = event.data.requestId;
     try {
-      const items = await chrome.storage.sync.get({ googleMapsApiKey: '' });
+      const items = await chrome.storage.sync.get({ googleMapsApiKey: "" });
       window.postMessage(
         {
           type: "GOOGLE_MAPS_API_KEY_RESPONSE",
           requestId,
-          apiKey: items.googleMapsApiKey || '',
+          apiKey: items.googleMapsApiKey || "",
           [FROM_BRIDGE]: true
         },
         "*"
@@ -460,7 +467,7 @@ window.addEventListener("message", async (event) => {
         {
           type: "GOOGLE_MAPS_API_KEY_RESPONSE",
           requestId,
-          apiKey: '',
+          apiKey: "",
           [FROM_BRIDGE]: true
         },
         "*"

@@ -3481,27 +3481,14 @@ const STREET_VIEW_PANEL_ID = "trail-overlay-street-view-panel";
 let googleMapsApiKey = "";
 
 async function fetchGoogleMapsApiKeyFromBridge() {
-  return new Promise((resolve) => {
-    const requestId = String(Math.random());
-    const onMessage = (event) => {
-      if (
-        event.data?.type === "GOOGLE_MAPS_API_KEY_RESPONSE" &&
-        event.data?.requestId === requestId
-      ) {
-        window.removeEventListener("message", onMessage);
-        resolve(event.data?.apiKey || "");
-      }
-    };
-    window.addEventListener("message", onMessage);
-    window.postMessage(
-      { type: "GET_GOOGLE_MAPS_API_KEY", requestId, [TO_BRIDGE]: true },
-      "*"
-    );
-    setTimeout(() => {
-      window.removeEventListener("message", onMessage);
-      resolve("");
-    }, 5000);
-  });
+  return fetchFromBridgeWithTimeout(
+    "GET_GOOGLE_MAPS_API_KEY",
+    "GOOGLE_MAPS_API_KEY_RESPONSE",
+    "",
+    (data) => data.apiKey || "",
+    { requestSource: "trail-overlay-content" },
+    5000
+  );
 }
 
 function closeStreetViewPanel() {
@@ -3521,7 +3508,7 @@ function closeStreetViewPanel() {
 function createStreetViewPanel(lat, lng) {
   closeStreetViewPanel();
 
-  const container = document.querySelector(".mapboxgl-map");
+  const container = document.querySelector(".mapboxgl-map, .maplibregl-map");
   if (!container) return;
 
   const panel = document.createElement("div");
@@ -3589,7 +3576,7 @@ function createStreetViewPanel(lat, lng) {
   });
   expandBtn.addEventListener("click", () => {
     panel.__isExpanded = !panel.__isExpanded;
-    expandBtn.textContent = panel.__isExpanded ? "⛶" : "⛶";
+    expandBtn.textContent = panel.__isExpanded ? "-" : "+";
     expandBtn.style.color = panel.__isExpanded
       ? "rgba(244,244,245,0.9)"
       : "rgba(244,244,245,0.6)";
@@ -3805,25 +3792,31 @@ async function loadStreetViewPanorama(container, lat, lng, panel) {
       script.defer = true;
 
       await new Promise((resolve, reject) => {
-        script.onload = () => {
-          console.log("[StreetView] Maps API loaded");
-          resolve();
-        };
-        script.onerror = () => {
-          console.error("[StreetView] Maps API load failed");
-          reject(new Error("Failed to load Maps API"));
-        };
-
+        let settled = false;
         const timeout = setTimeout(() => {
-          if (!window.google?.maps) {
-            reject(new Error("Maps API timeout"));
-          }
+          if (settled) return;
+          settled = true;
+          reject(new Error("Maps API timeout"));
         }, 8000);
 
-        script.onload = () => {
+        const finish = (cb) => {
+          if (settled) return;
+          settled = true;
           clearTimeout(timeout);
-          console.log("[StreetView] Maps API loaded");
-          resolve();
+          cb();
+        };
+
+        script.onload = () => {
+          finish(() => {
+            console.log("[StreetView] Maps API loaded");
+            resolve();
+          });
+        };
+        script.onerror = () => {
+          finish(() => {
+            console.error("[StreetView] Maps API load failed");
+            reject(new Error("Failed to load Maps API"));
+          });
         };
 
         document.head.appendChild(script);

@@ -1,4 +1,5 @@
 const DEFAULT_API_URL = 'https://trail-overlay.vercel.app'
+const GOOGLE_MAPS_ORIGIN = 'https://maps.googleapis.com/*'
 
 const PRESET_NAMES = ['yellow', 'red', 'blue', 'green']
 
@@ -56,7 +57,29 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   let hexSaveTimer = null
-  let validateTimer = null
+
+  const ensureOriginPermission = async (originPattern) => {
+    if (!chrome.permissions?.contains || !chrome.permissions?.request) return true
+    return new Promise((resolve) => {
+      chrome.permissions.contains({ origins: [originPattern] }, (hasPermission) => {
+        if (chrome.runtime?.lastError) {
+          resolve(false)
+          return
+        }
+        if (hasPermission) {
+          resolve(true)
+          return
+        }
+        chrome.permissions.request({ origins: [originPattern] }, (granted) => {
+          if (chrome.runtime?.lastError) {
+            resolve(false)
+            return
+          }
+          resolve(Boolean(granted))
+        })
+      })
+    })
+  }
 
   const syncHexVisibility = () => {
     const isCustom = bookmarkHaloPreset.value === 'custom'
@@ -77,9 +100,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     keyStatus.textContent = 'Validating...'
+    keyStatus.style.color = '#666'
     validateKeyBtn.disabled = true
 
     try {
+      const granted = await ensureOriginPermission(GOOGLE_MAPS_ORIGIN)
+      if (!granted) {
+        keyStatus.textContent = '✗ Permission denied for maps.googleapis.com'
+        keyStatus.style.color = '#ef4444'
+        return
+      }
+
       // Test with Street View metadata API (free call)
       const lat = 40.7128
       const lng = -74.0060
@@ -91,36 +122,30 @@ document.addEventListener('DOMContentLoaded', () => {
       if (data.status === 'OK') {
         keyStatus.textContent = '✓ Valid API key'
         keyStatus.style.color = '#22c55e'
-        chrome.storage.sync.set({ googleMapsApiKey: key.trim() }, () => {
-          setTimeout(() => {
-            keyStatus.textContent = ''
-            keyStatus.style.color = '#666'
-            validateKeyBtn.disabled = false
-          }, 2000)
-        })
+        chrome.storage.sync.set({ googleMapsApiKey: key.trim() })
       } else if (data.status === 'ZERO_RESULTS') {
         keyStatus.textContent = '✓ Key is valid (no Street View at test location)'
         keyStatus.style.color = '#22c55e'
-        chrome.storage.sync.set({ googleMapsApiKey: key.trim() }, () => {
-          setTimeout(() => {
-            keyStatus.textContent = ''
-            keyStatus.style.color = '#666'
-            validateKeyBtn.disabled = false
-          }, 2000)
-        })
+        chrome.storage.sync.set({ googleMapsApiKey: key.trim() })
       } else if (data.status === 'REQUEST_DENIED') {
         keyStatus.textContent = '✗ Invalid API key or API not enabled'
         keyStatus.style.color = '#ef4444'
-        validateKeyBtn.disabled = false
       } else {
         keyStatus.textContent = `✗ Error: ${data.status}`
         keyStatus.style.color = '#ef4444'
-        validateKeyBtn.disabled = false
       }
-    } catch (err) {
+    } catch (_) {
       keyStatus.textContent = '✗ Error validating key'
       keyStatus.style.color = '#ef4444'
+    } finally {
       validateKeyBtn.disabled = false
+
+      if (keyStatus.style.color === 'rgb(34, 197, 94)') {
+        setTimeout(() => {
+          keyStatus.textContent = ''
+          keyStatus.style.color = '#666'
+        }, 2000)
+      }
     }
   }
 
@@ -170,7 +195,6 @@ document.addEventListener('DOMContentLoaded', () => {
   })
 
   googleMapsApiKey.addEventListener('input', () => {
-    clearTimeout(validateTimer)
     keyStatus.textContent = ''
     keyStatus.style.color = '#666'
   })

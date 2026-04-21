@@ -129,11 +129,8 @@ async function main() {
   const extensionName = sanitizeName(manifest.name || 'trail-overlay-strava-extension')
   const versionDir = path.join(RELEASES_DIR, `v${version}`)
 
-  const buildStat = await fs.stat(BUILD_DIR).catch(() => null)
-  if (!buildStat?.isDirectory()) {
-    console.log('Building extension targets...')
-    await buildTargets()
-  }
+  console.log('Building extension targets...')
+  await buildTargets()
 
   await fs.mkdir(versionDir, { recursive: true })
 

@@ -4,20 +4,20 @@
       "version": "1.0.2",
       "target": "chrome",
       "file": "v1.0.2/trail-overlay-for-strava-chrome-v1.0.2.zip",
-      "sizeBytes": 47898,
-      "sha256": "9ec25e942fc779b7d2df27684eba4097e4531f2d82f7458c57f88c3dfca7d385",
-      "createdAt": "2026-04-21T22:29:54.848Z"
+      "sizeBytes": 48105,
+      "sha256": "93413bd0431405a7ef138e5fe70571c0707af2e9c40df7327e6e067af782df4b",
+      "createdAt": "2026-04-21T22:49:19.692Z"
     },
     "firefox": {
       "version": "1.0.2",
       "target": "firefox",
       "file": "v1.0.2/trail-overlay-for-strava-firefox-v1.0.2.zip",
-      "sizeBytes": 47954,
-      "sha256": "e47fcce4bcca2b1fc0e9abb7c105b8cf2131596b9d669978caef644f7634d513",
-      "createdAt": "2026-04-21T22:29:54.891Z"
+      "sizeBytes": 48212,
+      "sha256": "65b2be61baac6ad77d478f0d40c5fa454062224f7523f04ac81a07d342ee2ea3",
+      "createdAt": "2026-04-21T22:49:19.719Z"
     },
     "version": "1.0.2",
-    "createdAt": "2026-04-21T22:29:54.893Z"
+    "createdAt": "2026-04-21T22:49:19.720Z"
   },
   "releases": [
     {
@@ -27,20 +27,20 @@
           "version": "1.0.2",
           "target": "chrome",
           "file": "v1.0.2/trail-overlay-for-strava-chrome-v1.0.2.zip",
-          "sizeBytes": 47898,
-          "sha256": "9ec25e942fc779b7d2df27684eba4097e4531f2d82f7458c57f88c3dfca7d385",
-          "createdAt": "2026-04-21T22:29:54.848Z"
+          "sizeBytes": 48105,
+          "sha256": "93413bd0431405a7ef138e5fe70571c0707af2e9c40df7327e6e067af782df4b",
+          "createdAt": "2026-04-21T22:49:19.692Z"
         },
         "firefox": {
           "version": "1.0.2",
           "target": "firefox",
           "file": "v1.0.2/trail-overlay-for-strava-firefox-v1.0.2.zip",
-          "sizeBytes": 47954,
-          "sha256": "e47fcce4bcca2b1fc0e9abb7c105b8cf2131596b9d669978caef644f7634d513",
-          "createdAt": "2026-04-21T22:29:54.891Z"
+          "sizeBytes": 48212,
+          "sha256": "65b2be61baac6ad77d478f0d40c5fa454062224f7523f04ac81a07d342ee2ea3",
+          "createdAt": "2026-04-21T22:49:19.719Z"
         }
       },
-      "createdAt": "2026-04-21T22:29:54.893Z"
+      "createdAt": "2026-04-21T22:49:19.720Z"
     },
     {
       "version": "1.0.0",
