@@ -1,12 +1,13 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { createHash } from 'crypto'
+import { execSync } from 'child_process'
 import JSZip from 'jszip'
 
 const EXTENSION_DIR = path.resolve(process.cwd(), 'browser-extension')
+const BUILD_DIR = path.resolve(process.cwd(), 'extension-build')
 const RELEASES_DIR = path.resolve(process.cwd(), 'extension-releases')
 const RELEASES_INDEX = path.join(RELEASES_DIR, 'releases.json')
-const LATEST_ZIP = path.join(RELEASES_DIR, 'latest.zip')
 
 function sanitizeName(value) {
   return value
@@ -54,42 +55,31 @@ async function readReleaseIndex() {
   }
 }
 
-function upsertRelease(index, entry) {
-  const releases = index.releases.filter(r => r.version !== entry.version)
-  releases.push(entry)
-  releases.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
 
-  return {
-    latest: entry,
-    releases,
+async function buildTargets() {
+  const buildScript = path.join(process.cwd(), 'scripts/build-extension-targets.mjs')
+  try {
+    execSync(`node ${buildScript}`, { stdio: 'inherit' })
+  } catch (err) {
+    throw new Error(`Failed to build extension targets: ${err.message}`)
   }
 }
 
-async function main() {
-  const manifestPath = path.join(EXTENSION_DIR, 'manifest.json')
-  const manifestRaw = await fs.readFile(manifestPath, 'utf8')
-  const manifest = JSON.parse(manifestRaw)
+async function releaseTarget(target, versionDir, extensionName, version) {
+  const sourceDir = path.join(BUILD_DIR, target)
+  const manifestPath = path.join(sourceDir, 'manifest.json')
 
-  const version = String(manifest.version || '').trim()
-  if (!version) {
-    throw new Error('manifest.json is missing a version field')
+  const manifestStat = await fs.stat(manifestPath).catch(() => null)
+  if (!manifestStat?.isFile()) {
+    throw new Error(`Missing manifest in built ${target} extension: ${manifestPath}`)
   }
 
-  const extensionName = sanitizeName(manifest.name || 'trail-overlay-strava-extension')
-  const zipFileName = `${extensionName}-v${version}.zip`
-  const versionDir = path.join(RELEASES_DIR, `v${version}`)
+  const zipFileName = `${extensionName}-${target}-v${version}.zip`
   const zipPath = path.join(versionDir, zipFileName)
 
-  const extensionStat = await fs.stat(EXTENSION_DIR).catch(() => null)
-  if (!extensionStat?.isDirectory()) {
-    throw new Error(`Missing browser extension directory: ${EXTENSION_DIR}`)
-  }
-
-  await fs.mkdir(versionDir, { recursive: true })
-
-  const files = await collectFiles(EXTENSION_DIR)
+  const files = await collectFiles(sourceDir)
   if (files.length === 0) {
-    throw new Error('No files found under browser-extension/')
+    throw new Error(`No files found in extension-build/${target}/`)
   }
 
   const zip = new JSZip()
@@ -104,25 +94,66 @@ async function main() {
   })
 
   await fs.writeFile(zipPath, buffer)
-  await fs.copyFile(zipPath, LATEST_ZIP)
 
   const sha256 = createHash('sha256').update(buffer).digest('hex')
   const stats = await fs.stat(zipPath)
 
   const entry = {
     version,
+    target,
     file: path.relative(RELEASES_DIR, zipPath).replace(/\\/g, '/'),
     sizeBytes: stats.size,
     sha256,
     createdAt: new Date().toISOString(),
   }
 
-  const nextIndex = upsertRelease(await readReleaseIndex(), entry)
-  await fs.writeFile(RELEASES_INDEX, `${JSON.stringify(nextIndex, null, 2)}\n`, 'utf8')
+  const latestFile = path.join(RELEASES_DIR, `latest-${target}.zip`)
+  await fs.copyFile(zipPath, latestFile)
 
   console.log(`Created ${path.relative(process.cwd(), zipPath)}`)
-  console.log(`Updated ${path.relative(process.cwd(), LATEST_ZIP)}`)
+  console.log(`Updated ${path.relative(process.cwd(), latestFile)}`)
+
+  return entry
+}
+
+async function main() {
+  const manifestPath = path.join(EXTENSION_DIR, 'manifest.json')
+  const manifestRaw = await fs.readFile(manifestPath, 'utf8')
+  const manifest = JSON.parse(manifestRaw)
+
+  const version = String(manifest.version || '').trim()
+  if (!version) {
+    throw new Error('manifest.json is missing a version field')
+  }
+
+  const extensionName = sanitizeName(manifest.name || 'trail-overlay-strava-extension')
+  const versionDir = path.join(RELEASES_DIR, `v${version}`)
+
+  console.log('Building extension targets...')
+  await buildTargets()
+
+  await fs.mkdir(versionDir, { recursive: true })
+
+  const chromeEntry = await releaseTarget('chrome', versionDir, extensionName, version)
+  const firefoxEntry = await releaseTarget('firefox', versionDir, extensionName, version)
+
+  const currentIndex = await readReleaseIndex()
+  const nextIndex = {
+    latest: {
+      chrome: chromeEntry,
+      firefox: firefoxEntry,
+      version,
+      createdAt: new Date().toISOString(),
+    },
+    releases: [
+      ...currentIndex.releases.filter(r => r.version !== version),
+      { version, targets: { chrome: chromeEntry, firefox: firefoxEntry }, createdAt: new Date().toISOString() },
+    ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+  }
+
+  await fs.writeFile(RELEASES_INDEX, `${JSON.stringify(nextIndex, null, 2)}\n`, 'utf8')
   console.log(`Updated ${path.relative(process.cwd(), RELEASES_INDEX)}`)
+  console.log(`✓ Release v${version} complete (Chrome MV3 + Firefox MV2)`)
 }
 
 main().catch(err => {

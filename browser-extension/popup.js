@@ -1,4 +1,5 @@
-const DEFAULT_API_URL = 'http://localhost:3000'
+const DEFAULT_API_URL = 'https://trail-overlay.vercel.app'
+const GOOGLE_MAPS_ORIGIN = 'https://maps.googleapis.com/*'
 
 const PRESET_NAMES = ['yellow', 'red', 'blue', 'green']
 
@@ -42,16 +43,43 @@ document.addEventListener('DOMContentLoaded', () => {
   const showTrailPhotos = document.getElementById('showTrailPhotos')
   const bookmarkHaloPreset = document.getElementById('bookmarkHaloPreset')
   const bookmarkHaloHex = document.getElementById('bookmarkHaloHex')
+  const googleMapsApiKey = document.getElementById('googleMapsApiKey')
+  const validateKeyBtn = document.getElementById('validateKey')
+  const keyStatus = document.getElementById('keyStatus')
 
   const storageDefaults = {
     apiUrl: DEFAULT_API_URL,
     overlayTrailsVisible: true,
     overlayNetworksVisible: true,
     overlayTrailPhotosVisible: true,
-    overlayBookmarkHighlightColor: 'yellow'
+    overlayBookmarkHighlightColor: 'yellow',
+    googleMapsApiKey: ''
   }
 
   let hexSaveTimer = null
+
+  const ensureOriginPermission = async (originPattern) => {
+    if (!chrome.permissions?.contains || !chrome.permissions?.request) return true
+    return new Promise((resolve) => {
+      chrome.permissions.contains({ origins: [originPattern] }, (hasPermission) => {
+        if (chrome.runtime?.lastError) {
+          resolve(false)
+          return
+        }
+        if (hasPermission) {
+          resolve(true)
+          return
+        }
+        chrome.permissions.request({ origins: [originPattern] }, (granted) => {
+          if (chrome.runtime?.lastError) {
+            resolve(false)
+            return
+          }
+          resolve(Boolean(granted))
+        })
+      })
+    })
+  }
 
   const syncHexVisibility = () => {
     const isCustom = bookmarkHaloPreset.value === 'custom'
@@ -65,11 +93,68 @@ document.addEventListener('DOMContentLoaded', () => {
     })
   }
 
+  const validateGoogleMapsKey = async (key) => {
+    if (!key || key.trim().length === 0) {
+      keyStatus.textContent = ''
+      return
+    }
+
+    keyStatus.textContent = 'Validating...'
+    keyStatus.style.color = '#666'
+    validateKeyBtn.disabled = true
+
+    try {
+      const granted = await ensureOriginPermission(GOOGLE_MAPS_ORIGIN)
+      if (!granted) {
+        keyStatus.textContent = '✗ Permission denied for maps.googleapis.com'
+        keyStatus.style.color = '#ef4444'
+        return
+      }
+
+      // Test with Street View metadata API (free call)
+      const lat = 40.7128
+      const lng = -74.0060
+      const url = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${lat},${lng}&key=${encodeURIComponent(key.trim())}`
+
+      const response = await fetch(url)
+      const data = await response.json()
+
+      if (data.status === 'OK') {
+        keyStatus.textContent = '✓ Valid API key'
+        keyStatus.style.color = '#22c55e'
+        chrome.storage.sync.set({ googleMapsApiKey: key.trim() })
+      } else if (data.status === 'ZERO_RESULTS') {
+        keyStatus.textContent = '✓ Key is valid (no Street View at test location)'
+        keyStatus.style.color = '#22c55e'
+        chrome.storage.sync.set({ googleMapsApiKey: key.trim() })
+      } else if (data.status === 'REQUEST_DENIED') {
+        keyStatus.textContent = '✗ Invalid API key or API not enabled'
+        keyStatus.style.color = '#ef4444'
+      } else {
+        keyStatus.textContent = `✗ Error: ${data.status}`
+        keyStatus.style.color = '#ef4444'
+      }
+    } catch (_) {
+      keyStatus.textContent = '✗ Error validating key'
+      keyStatus.style.color = '#ef4444'
+    } finally {
+      validateKeyBtn.disabled = false
+
+      if (keyStatus.style.color === 'rgb(34, 197, 94)') {
+        setTimeout(() => {
+          keyStatus.textContent = ''
+          keyStatus.style.color = '#666'
+        }, 2000)
+      }
+    }
+  }
+
   chrome.storage.sync.get(storageDefaults, (items) => {
     input.value = items.apiUrl
     showTrails.checked = items.overlayTrailsVisible !== false
     showNetworks.checked = items.overlayNetworksVisible !== false
     showTrailPhotos.checked = items.overlayTrailPhotosVisible !== false
+    googleMapsApiKey.value = items.googleMapsApiKey || ''
 
     const { preset, hex } = classifyHighlight(items.overlayBookmarkHighlightColor)
     bookmarkHaloPreset.value = preset
@@ -103,6 +188,15 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       persist()
     })
+  })
+
+  validateKeyBtn.addEventListener('click', () => {
+    validateGoogleMapsKey(googleMapsApiKey.value)
+  })
+
+  googleMapsApiKey.addEventListener('input', () => {
+    keyStatus.textContent = ''
+    keyStatus.style.color = '#666'
   })
 
   showTrails.addEventListener('change', () => {

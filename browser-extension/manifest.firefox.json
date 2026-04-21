@@ -1,5 +1,5 @@
 {
-  "manifest_version": 3,
+  "manifest_version": 2,
   "name": "Trail Overlay for Strava",
   "version": "1.0.2",
   "description": "Overlays mountain bike trails on Strava maps",
@@ -11,18 +11,17 @@
   },
   "permissions": [
     "storage",
-    "permissions"
-  ],
-  "host_permissions": [
     "https://www.strava.com/*",
     "http://127.0.0.1/*"
   ],
-  "optional_host_permissions": [
+  "optional_permissions": [
     "https://*/*",
     "https://maps.googleapis.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "scripts": [
+      "background.js"
+    ]
   },
   "content_scripts": [
     {
@@ -39,22 +38,25 @@
     }
   ],
   "web_accessible_resources": [
-    {
-      "resources": [
-        "content-init.js",
-        "content.js"
-      ],
-      "matches": [
-        "https://www.strava.com/*"
-      ]
-    }
+    "content-init.js",
+    "content.js"
   ],
-  "action": {
+  "browser_action": {
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png"
     },
     "default_popup": "popup.html",
     "default_title": "Trail Overlay Settings"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "trail-overlay@harry.local",
+      "strict_min_version": "109.0",
+      "data_collection_permissions": {
+        "required": ["websiteContent", "websiteActivity"],
+        "optional": ["technicalAndInteraction"]
+      }
+    }
   }
 }
