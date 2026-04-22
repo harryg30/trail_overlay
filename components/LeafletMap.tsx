@@ -1538,8 +1538,55 @@ export default function LeafletMap({
             const { lat, lng } = marker.getLatLng()
             // Snap dragged point to nearest way
             const snapped = await snapToNearestWay(lat, lng, 50)
-            if (snapped) {
-              staged.moveDrawPoint(i, [snapped.point[1], snapped.point[0]])
+            if (!snapped) return
+
+            const snappedLatLng: [number, number] = [snapped.point[1], snapped.point[0]]
+            console.log('[snap-drag] Snapped point', i, 'to', snappedLatLng)
+
+            const segment = activeDrawSeg
+            if (!segment || segment.polyline.length < 2 || i === 0) {
+              // Can't recalculate if first point or insufficient points
+              staged.moveDrawPoint(i, snappedLatLng)
+              return
+            }
+
+            try {
+              const prevPoint = segment.polyline[i - 1]
+              console.log('[snap-drag] Re-routing from', prevPoint, 'to', snappedLatLng)
+
+              // Re-route from previous point through newly snapped point
+              const routeResult = await routeBetweenPoints(
+                prevPoint[0],
+                prevPoint[1],
+                snappedLatLng[0],
+                snappedLatLng[1]
+              )
+
+              if (!routeResult?.polyline) {
+                console.error('[snap-drag] Re-routing failed, keeping snapped point')
+                staged.moveDrawPoint(i, snappedLatLng)
+                return
+              }
+
+              console.log('[snap-drag] Got route with', routeResult.polyline.length, 'points')
+
+              // Move current point to snapped location first
+              staged.moveDrawPoint(i, snappedLatLng)
+
+              // Now insert route points after the previous point to rebuild the path
+              // We need to insert the intermediate route points that come after prevPoint
+              const routePoints = routeResult.polyline
+                .slice(1) // Skip first point (it's prevPoint)
+                .map(p => [p[1], p[0]] as [number, number])
+
+              for (const point of routePoints) {
+                staged.insertDrawPointAfter(i - 1, point)
+              }
+
+              console.log('[snap-drag] Inserted', routePoints.length, 'intermediate route points')
+            } catch (err) {
+              console.error('[snap-drag] Error recalculating route:', err)
+              staged.moveDrawPoint(i, snappedLatLng)
             }
           })
         }
