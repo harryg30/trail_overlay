@@ -24,8 +24,19 @@ export default function RideMatcherPage() {
   const [gameState, setGameState] = useState<GameState | null>(null)
   const [rides, setRides] = useState<Ride[]>([])
   const [guessing, setGuessing] = useState(false)
+  const [currentPoint, setCurrentPoint] = useState<{ lat: number; lng: number } | null>(null)
+  const [streetViewAttempts, setStreetViewAttempts] = useState(0)
   const mapRef = useRef<any>(null)
   const mapContainerRef = useRef<HTMLDivElement>(null)
+
+  // Initialize map only after game loads + rides are ready
+  useEffect(() => {
+    if (!session || !gameState) return
+    // Set current point from session round
+    const currentRound = session.rounds[gameState.round]
+    setCurrentPoint({ lat: currentRound.lat, lng: currentRound.lng })
+    setStreetViewAttempts(0)
+  }, [session, gameState?.round])
 
   // Initialize map only after game loads + rides are ready
   useEffect(() => {
@@ -179,7 +190,35 @@ export default function RideMatcherPage() {
     )
   }
 
-  const streetViewUrl = `https://maps.googleapis.com/maps/api/streetview?size=600x400&location=${currentRound.lat},${currentRound.lng}&heading=auto&pitch=0&key=${STREET_VIEW_API_KEY}`
+  // Build Street View URL using current point (may change if retrying)
+  const streetViewUrl = currentPoint
+    ? `https://maps.googleapis.com/maps/api/streetview?size=600x400&location=${currentPoint.lat},${currentPoint.lng}&heading=auto&pitch=0&key=${STREET_VIEW_API_KEY}`
+    : ''
+
+  // Handle Street View image load failure - try another point on the ride
+  const handleStreetViewError = () => {
+    if (!session || !currentPoint || streetViewAttempts >= 4) {
+      console.error('Street View unavailable after retries')
+      return
+    }
+
+    // Get current ride and pick a different random point
+    const currentRound = session.rounds[gameState!.round]
+    const rideId = currentRound.rideId
+    const ride = rides.find((r) => r.id === rideId)
+
+    if (!ride || !ride.polyline || ride.polyline.length === 0) {
+      console.error('Ride not found or has no polyline')
+      return
+    }
+
+    // Pick a random point from the ride
+    const randomIdx = Math.floor(Math.random() * ride.polyline.length)
+    const newPoint = ride.polyline[randomIdx]
+
+    setCurrentPoint({ lat: newPoint[0], lng: newPoint[1] })
+    setStreetViewAttempts(streetViewAttempts + 1)
+  }
 
   const handleGuess = async (guessRideId: string) => {
     setGuessing(true)
@@ -269,13 +308,13 @@ export default function RideMatcherPage() {
                 <h2 className="text-lg font-semibold mb-2">Where are you?</h2>
                 <div className="bg-gray-100 rounded overflow-hidden">
                   <img
+                    key={`${currentPoint?.lat}-${currentPoint?.lng}`}
                     src={streetViewUrl}
                     alt="Street View"
                     className="w-full h-96 object-cover"
-                    onError={(e) => {
-                      console.error('Street View image failed to load:', streetViewUrl)
-                      e.currentTarget.src =
-                        'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22600%22 height=%22400%22%3E%3Crect fill=%22%23f0f0f0%22 width=%22600%22 height=%22400%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-family=%22Arial%22 font-size=%2216%22 fill=%22%23999%22%3EStreet View not available%3C/text%3E%3C/svg%3E'
+                    onError={() => {
+                      console.warn(`Street View unavailable at ${currentPoint?.lat},${currentPoint?.lng}. Trying another point...`)
+                      handleStreetViewError()
                     }}
                   />
                 </div>
