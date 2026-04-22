@@ -27,22 +27,22 @@ export default function RideMatcherPage() {
   const mapRef = useRef<any>(null)
   const mapContainerRef = useRef<HTMLDivElement>(null)
 
-  // Initialize map
+  // Initialize map only after game loads + rides are ready
   useEffect(() => {
-    if (!mapContainerRef.current || rides.length === 0) return
+    if (!mapContainerRef.current || rides.length === 0 || !session) return
 
     // Dynamic import of Leaflet (only runs client-side)
     import('leaflet').then((L) => {
-      if (!mapRef.current) {
-        mapRef.current = L.map(mapContainerRef.current!).setView([40, -105], 10)
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          attribution: '© OpenStreetMap contributors',
-          maxZoom: 19,
-        }).addTo(mapRef.current)
-      }
+      if (mapRef.current) return // Already initialized
+
+      mapRef.current = L.map(mapContainerRef.current!).setView([40, -105], 10)
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19,
+      }).addTo(mapRef.current)
 
       // Add game rides
-      const gameRideIds = session?.rideIds || []
+      const gameRideIds = session.rideIds
       const gameRides = rides.filter((r) => gameRideIds.includes(r.id))
 
       gameRides.forEach((ride, idx) => {

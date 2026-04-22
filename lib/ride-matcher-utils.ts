@@ -1,5 +1,5 @@
 import { Ride } from './types'
-import { haversineKm, pointToPolylineDistanceKm } from './geo-utils'
+import { haversineKm, pointToPolylineDistanceKm, resamplePolyline } from './geo-utils'
 
 const UNIQUENESS_THRESHOLD_KM = 0.5
 const MIN_RIDES = 5
@@ -22,6 +22,7 @@ export interface GameSession {
 
 /**
  * Calculate what percentage of a ride's points are unique (far from other rides)
+ * Uses resampled polylines for speed (every 200m instead of every point)
  * @param ridePolyline Points from the ride to check
  * @param otherRides All other rides in set (excluding the one being checked)
  * @param thresholdKm Distance threshold for uniqueness
@@ -34,16 +35,19 @@ export function calculatePointUniqueness(
 ): number {
   if (ridePolyline.length === 0) return 0
 
+  // Resample to every 0.2km for speed (typical resolution is fine grained enough)
+  const sampledPoints = resamplePolyline(ridePolyline, 0.2)
   let uniqueCount = 0
 
-  for (const point of ridePolyline) {
-    // Check if this point is far from all other rides
+  for (const point of sampledPoints) {
     let isUnique = true
 
     for (const otherRide of otherRides) {
       if (otherRide.polyline.length === 0) continue
 
-      const minDist = pointToPolylineDistanceKm(point, otherRide.polyline)
+      // Resample other ride too for speed
+      const sampledOther = resamplePolyline(otherRide.polyline, 0.2)
+      const minDist = pointToPolylineDistanceKm(point, sampledOther)
       if (minDist <= thresholdKm) {
         isUnique = false
         break
@@ -53,7 +57,7 @@ export function calculatePointUniqueness(
     if (isUnique) uniqueCount++
   }
 
-  return uniqueCount / ridePolyline.length
+  return uniqueCount / sampledPoints.length
 }
 
 /**
@@ -102,11 +106,15 @@ export function selectPointPerRide(
     throw new Error('No polyline points available')
   }
 
+  // Sample to every 0.2km for speed
+  const sampledPoints = resamplePolyline(ridePolyline, 0.2)
+
   // Find unique points (far from all other rides)
-  const uniquePoints = ridePolyline.filter((point) => {
+  const uniquePoints = sampledPoints.filter((point) => {
     for (const otherRide of otherRides) {
       if (otherRide.polyline.length === 0) continue
-      const minDist = pointToPolylineDistanceKm(point, otherRide.polyline)
+      const sampledOther = resamplePolyline(otherRide.polyline, 0.2)
+      const minDist = pointToPolylineDistanceKm(point, sampledOther)
       if (minDist <= thresholdKm) {
         return false
       }
@@ -115,7 +123,7 @@ export function selectPointPerRide(
   })
 
   // Prefer unique points, but fallback to random point if none available
-  const pointPool = uniquePoints.length > 0 ? uniquePoints : ridePolyline
+  const pointPool = uniquePoints.length > 0 ? uniquePoints : sampledPoints
   const randomIndex = Math.floor(Math.random() * pointPool.length)
   return pointPool[randomIndex]
 }
