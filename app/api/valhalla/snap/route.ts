@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const VALHALLA_BASE = 'https://api.openrouteservice.org/v2'
+const ORS_BASE = 'https://api.openrouteservice.org'
 const ORS_API_KEY = process.env.NEXT_PUBLIC_ORS_API_KEY
 
 export async function POST(req: NextRequest) {
@@ -11,13 +11,15 @@ export async function POST(req: NextRequest) {
   try {
     const { lat, lng, radiusMeters = 50 } = await req.json()
 
-    const response = await fetch(`${VALHALLA_BASE}/nearest?api_key=${ORS_API_KEY}`, {
+    const response = await fetch(`${ORS_BASE}/v2/snap/cycling-electric`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': ORS_API_KEY,
+      },
       body: JSON.stringify({
-        location: [lng, lat],
-        preference: 'bicycle',
-        radius_meters: radiusMeters,
+        locations: [[lng, lat]],
+        radius: radiusMeters,
       }),
     })
 
@@ -25,13 +27,35 @@ export async function POST(req: NextRequest) {
       if (response.status === 429) {
         return NextResponse.json({ error: 'Rate limited' }, { status: 429 })
       }
-      return NextResponse.json({ error: `Snap failed: ${response.status}` }, { status: response.status })
+      const errorText = await response.text()
+      return NextResponse.json(
+        { error: `Snap failed: ${response.status}`, details: errorText },
+        { status: response.status }
+      )
     }
 
     const data = await response.json()
-    return NextResponse.json(data)
+
+    // Transform ORS response to match client's expected format
+    if (!data.locations?.[0]) {
+      return NextResponse.json(null)
+    }
+
+    const snapped = data.locations[0]
+    const transformed = {
+      matched_point: {
+        lat: snapped.location[1],
+        lng: snapped.location[0],
+      },
+      edges: [{
+        way_id: 0, // ORS doesn't provide way_id
+        names: snapped.name ? [snapped.name] : [],
+      }],
+    }
+
+    return NextResponse.json(transformed)
   } catch (error) {
     console.error('Snap proxy error:', error)
-    return NextResponse.json({ error: 'Snap failed' }, { status: 500 })
+    return NextResponse.json({ error: 'Snap failed', details: String(error) }, { status: 500 })
   }
 }
