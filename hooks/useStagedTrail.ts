@@ -179,6 +179,23 @@ export function useStagedTrail() {
     })
   }, [applyEdit])
 
+  /** Append multiple points at once (more efficient than calling appendDrawPoint multiple times) */
+  const appendDrawPoints = useCallback((points: [number, number][]) => {
+    const end = activeEndRef.current
+    applyEdit((prev) => {
+      const target = findDrawTarget(prev, end)
+      if (target) {
+        const newPoly = end === 'end'
+          ? [...target.seg.polyline, ...points]
+          : [...points, ...target.seg.polyline]
+        return replaceAt(prev, target.idx, { ...target.seg, polyline: newPoly })
+      }
+      if (points.length === 0) return prev
+      const newSeg = { id: genId(), source: 'draw' as const, polyline: points }
+      return end === 'end' ? [...prev, newSeg] : [newSeg, ...prev]
+    })
+  }, [applyEdit])
+
   const removeDrawPoint = useCallback((index: number) => {
     const end = activeEndRef.current
     applyEdit((prev) => {
@@ -361,6 +378,7 @@ export function useStagedTrail() {
     canRedo: historyFuture.length > 0,
 
     appendDrawPoint,
+    appendDrawPoints,
     removeDrawPoint,
     moveDrawPoint,
     insertDrawPointAfter,
