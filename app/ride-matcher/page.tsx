@@ -3,9 +3,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { GameSession } from '@/lib/ride-matcher-utils'
 import { Ride } from '@/lib/types'
-import dynamic from 'next/dynamic'
 import 'leaflet/dist/leaflet.css'
-import L from 'leaflet'
 
 interface GameState {
   sessionId: string
@@ -25,36 +23,39 @@ export default function RideMatcherPage() {
   const [gameState, setGameState] = useState<GameState | null>(null)
   const [rides, setRides] = useState<Ride[]>([])
   const [guessing, setGuessing] = useState(false)
-  const mapRef = useRef<L.Map | null>(null)
+  const mapRef = useRef<any>(null)
   const mapContainerRef = useRef<HTMLDivElement>(null)
 
   // Initialize map
   useEffect(() => {
     if (!mapContainerRef.current || rides.length === 0) return
 
-    if (!mapRef.current) {
-      mapRef.current = L.map(mapContainerRef.current).setView([40, -105], 10)
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors',
-        maxZoom: 19,
-      }).addTo(mapRef.current)
-    }
-
-    // Add game rides
-    const gameRideIds = session?.rideIds || []
-    const gameRides = rides.filter((r) => gameRideIds.includes(r.id))
-
-    gameRides.forEach((ride, idx) => {
-      const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8']
-      const color = colors[idx % colors.length]
-
-      if (ride.polyline && ride.polyline.length > 0) {
-        L.polyline(ride.polyline, {
-          color,
-          weight: 2,
-          opacity: 0.6,
-        }).addTo(mapRef.current!)
+    // Dynamic import of Leaflet (only runs client-side)
+    import('leaflet').then((L) => {
+      if (!mapRef.current) {
+        mapRef.current = L.map(mapContainerRef.current!).setView([40, -105], 10)
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap contributors',
+          maxZoom: 19,
+        }).addTo(mapRef.current)
       }
+
+      // Add game rides
+      const gameRideIds = session?.rideIds || []
+      const gameRides = rides.filter((r) => gameRideIds.includes(r.id))
+
+      gameRides.forEach((ride, idx) => {
+        const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8']
+        const color = colors[idx % colors.length]
+
+        if (ride.polyline && ride.polyline.length > 0) {
+          L.polyline(ride.polyline, {
+            color,
+            weight: 2,
+            opacity: 0.6,
+          }).addTo(mapRef.current!)
+        }
+      })
     })
   }, [rides, session])
 
