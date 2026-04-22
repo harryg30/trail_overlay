@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
     }
 
     const currentRound = session.rounds[round]
-    const correct = guessRideId === currentRound.correctRideId
+    const correct = currentRound.correctRideIds.includes(guessRideId)
 
     // Calculate score based on guess attempt (0, 1, or 2)
     const scoreMap = { 0: 100, 1: 50, 2: 10 }

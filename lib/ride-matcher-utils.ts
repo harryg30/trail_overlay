@@ -1,16 +1,13 @@
 import { Ride } from './types'
-import { haversineKm, pointToPolylineDistanceKm, resamplePolyline } from './geo-utils'
+import { resamplePolyline } from './geo-utils'
 
-const UNIQUENESS_THRESHOLD_KM = 0.5
-const MIN_RIDES = 5
-const MIN_UNIQUENESS_RATIO = 0.25
 const ROUNDS_PER_GAME = 5
 
 export interface GameRound {
   rideId: string
   lat: number
   lng: number
-  correctRideId: string
+  correctRideIds: string[] // Multiple rides can have same location
 }
 
 export interface GameSession {
@@ -21,116 +18,9 @@ export interface GameSession {
 }
 
 /**
- * Calculate what percentage of a ride's points are unique (far from other rides)
- * Uses resampled polylines for speed (every 200m instead of every point)
- * @param ridePolyline Points from the ride to check
- * @param otherRides All other rides in set (excluding the one being checked)
- * @param thresholdKm Distance threshold for uniqueness
- * @returns Ratio from 0 to 1: unique points / total points
- */
-export function calculatePointUniqueness(
-  ridePolyline: [number, number][],
-  otherRides: Ride[],
-  thresholdKm = UNIQUENESS_THRESHOLD_KM
-): number {
-  if (ridePolyline.length === 0) return 0
-
-  // Resample to every 0.2km for speed (typical resolution is fine grained enough)
-  const sampledPoints = resamplePolyline(ridePolyline, 0.2)
-  let uniqueCount = 0
-
-  for (const point of sampledPoints) {
-    let isUnique = true
-
-    for (const otherRide of otherRides) {
-      if (otherRide.polyline.length === 0) continue
-
-      // Resample other ride too for speed
-      const sampledOther = resamplePolyline(otherRide.polyline, 0.2)
-      const minDist = pointToPolylineDistanceKm(point, sampledOther)
-      if (minDist <= thresholdKm) {
-        isUnique = false
-        break
-      }
-    }
-
-    if (isUnique) uniqueCount++
-  }
-
-  return uniqueCount / sampledPoints.length
-}
-
-/**
- * Filter rides to those with sufficient point uniqueness
- * @param rides All rides from user
- * @param minRides Minimum rides needed (error if fewer available)
- * @param minUniquenessRatio Minimum uniqueness (e.g., 0.25 = 25%)
- * @returns Filtered and shuffled rides
- */
-export function selectRidesToPlay(
-  rides: Ride[],
-  minRides = MIN_RIDES,
-  minUniquenessRatio = MIN_UNIQUENESS_RATIO
-): Ride[] {
-  // Filter to rides with sufficient unique points
-  const validRides = rides.filter((ride) => {
-    const otherRides = rides.filter((r) => r.id !== ride.id)
-    const uniqueness = calculatePointUniqueness(ride.polyline, otherRides)
-    return uniqueness >= minUniquenessRatio
-  })
-
-  if (validRides.length < minRides) {
-    throw new Error(
-      `Not enough unique rides for game. Need ${minRides}, found ${validRides.length} with sufficient uniqueness`
-    )
-  }
-
-  // Select first N and shuffle
-  const selected = validRides.slice(0, minRides).sort(() => Math.random() - 0.5)
-  return selected
-}
-
-/**
- * Pick a unique point from a ride (if available), else fallback to random point
- * @param ridePolyline Points from ride
- * @param otherRides All other rides in game set
- * @param thresholdKm Distance threshold
- * @returns [lat, lng] of selected point
- */
-export function selectPointPerRide(
-  ridePolyline: [number, number][],
-  otherRides: Ride[],
-  thresholdKm = UNIQUENESS_THRESHOLD_KM
-): [number, number] {
-  if (ridePolyline.length === 0) {
-    throw new Error('No polyline points available')
-  }
-
-  // Sample to every 0.2km for speed
-  const sampledPoints = resamplePolyline(ridePolyline, 0.2)
-
-  // Find unique points (far from all other rides)
-  const uniquePoints = sampledPoints.filter((point) => {
-    for (const otherRide of otherRides) {
-      if (otherRide.polyline.length === 0) continue
-      const sampledOther = resamplePolyline(otherRide.polyline, 0.2)
-      const minDist = pointToPolylineDistanceKm(point, sampledOther)
-      if (minDist <= thresholdKm) {
-        return false
-      }
-    }
-    return true
-  })
-
-  // Prefer unique points, but fallback to random point if none available
-  const pointPool = uniquePoints.length > 0 ? uniquePoints : sampledPoints
-  const randomIndex = Math.floor(Math.random() * pointPool.length)
-  return pointPool[randomIndex]
-}
-
-/**
- * Create a game session: select rides, pick points, generate session object
- * @param rides All rides from user
+ * Create a game session: randomly select 5+ rides and pick a random point from each
+ * No uniqueness requirement - multiple rides can share the same location
+ * @param rides All rides from user (min 5 required)
  * @param roundsPerGame Number of rounds (default 5)
  * @returns Game session ready for client
  */
@@ -138,32 +28,39 @@ export function createGameSession(
   rides: Ride[],
   roundsPerGame = ROUNDS_PER_GAME
 ): GameSession {
-  // Filter to valid rides
-  const selectedRides = selectRidesToPlay(rides)
+  if (rides.length < 5) {
+    throw new Error(`Need at least 5 rides. You have ${rides.length}.`)
+  }
 
-  // Take only the requested number of rounds
-  const gameRides = selectedRides.slice(0, roundsPerGame)
+  // Shuffle and take N rides
+  const shuffled = [...rides].sort(() => Math.random() - 0.5)
+  const selectedRides = shuffled.slice(0, roundsPerGame)
 
-  // Pick a point per ride
-  const rounds: GameRound[] = []
-  for (const ride of gameRides) {
-    const otherGameRides = gameRides.filter((r) => r.id !== ride.id)
-    const [lat, lng] = selectPointPerRide(ride.polyline, otherGameRides)
+  // Pick a random point from each ride
+  const rounds: GameRound[] = selectedRides.map((ride) => {
+    const polyline = ride.polyline
+    if (polyline.length === 0) {
+      throw new Error(`Ride ${ride.id} has no polyline`)
+    }
 
-    rounds.push({
+    // Randomly pick a point from the ride
+    const randomIdx = Math.floor(Math.random() * polyline.length)
+    const [lat, lng] = polyline[randomIdx]
+
+    return {
       rideId: ride.id,
       lat,
       lng,
-      correctRideId: ride.id,
-    })
-  }
+      correctRideIds: [ride.id], // Only this ride is correct for now
+    }
+  })
 
-  // Shuffle rounds order
+  // Shuffle question order for variety
   rounds.sort(() => Math.random() - 0.5)
 
-  // Build ride titles map (for display; add date if duplicate names)
+  // Build ride titles (add date if duplicates)
   const ridesByName = new Map<string, Ride[]>()
-  for (const ride of gameRides) {
+  for (const ride of selectedRides) {
     if (!ridesByName.has(ride.name)) {
       ridesByName.set(ride.name, [])
     }
@@ -171,10 +68,9 @@ export function createGameSession(
   }
 
   const rideTitles: Record<string, string> = {}
-  for (const ride of gameRides) {
+  for (const ride of selectedRides) {
     const ridesWithSameName = ridesByName.get(ride.name)!
     if (ridesWithSameName.length > 1 && ride.timestamp) {
-      // Add date to distinguish duplicates
       const dateStr = new Date(ride.timestamp).toLocaleDateString()
       rideTitles[ride.id] = `${ride.name} (${dateStr})`
     } else {
@@ -185,7 +81,7 @@ export function createGameSession(
   return {
     sessionId: `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
     rounds,
-    rideIds: gameRides.map((r) => r.id),
+    rideIds: selectedRides.map((r) => r.id),
     rideTitles,
   }
 }
