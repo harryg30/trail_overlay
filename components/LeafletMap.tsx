@@ -736,13 +736,14 @@ export default function LeafletMap({
                     // Convert all route points [lon, lat] to [lat, lon] and add in batch
                     const routePoints = routeResult.polyline.map((point) => [point[1], point[0]] as [number, number])
                     stagedRef.current?.appendDrawPoints(routePoints)
+                    setSnapFirstPoint(null)
+                    setSnapLoading(false)
                   } else {
-                    console.warn('[snap] Route invalid:', routeResult)
-                    // Route failed, just add the snapped point
-                    stagedRef.current?.appendDrawPoint(snappedPoint)
+                    console.error('[snap] Route failed: no valid path found between points')
+                    setSnapFirstPoint(null)
+                    setSnapLoading(false)
+                    // Don't add fallback line - let user retry
                   }
-                  setSnapFirstPoint(null)
-                  setSnapLoading(false)
                 })
                 .catch((err) => {
                   console.error('[snap] Route error:', err)
