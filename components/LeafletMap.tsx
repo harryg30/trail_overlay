@@ -231,10 +231,6 @@ export default function LeafletMap({
   const [snapFirstPoint, setSnapFirstPoint] = useState<[number, number] | null>(null)
   const [snapLoading, setSnapLoading] = useState(false)
 
-  // Track which polyline indices are intermediate (API-generated) vs user-clicked snap points
-  // Maps segment id -> Set of intermediate point indices within that segment
-  const intermediatePointsRef = useRef<Map<string, Set<number>>>(new Map())
-
   // Mutable refs — updated in component body so click handlers always read current values
   const trimModeRef = useRef(trimMode)
   const editTrailModeRef = useRef(editTrailMode)
@@ -335,91 +331,6 @@ export default function LeafletMap({
 
   const applyBasemapStyleRef = useRef(applyBasemapStyle)
   applyBasemapStyleRef.current = applyBasemapStyle
-
-  // Helper to re-snap and re-route when dragging intermediate points
-  const handleIntermediatePointDrag = useCallback(
-    async (pointIndex: number, lat: number, lng: number, segment: StagedSegment) => {
-      try {
-        const snappedResult = await snapToNearestWay(lat, lng, 50)
-        if (!snappedResult) {
-          console.error('[snap-reroute] Failed to snap dragged point')
-          return
-        }
-        console.log('[snap-reroute] Snapped to:', snappedResult.point)
-
-        const intermediates = intermediatePointsRef.current.get(segment.id) || new Set()
-
-        // Find previous snap point (non-intermediate)
-        let prevSnapIdx = pointIndex - 1
-        while (prevSnapIdx >= 0 && intermediates.has(prevSnapIdx)) prevSnapIdx--
-
-        // Find next snap point (non-intermediate)
-        let nextSnapIdx = pointIndex + 1
-        while (nextSnapIdx < segment.polyline.length && intermediates.has(nextSnapIdx)) nextSnapIdx++
-
-        if (prevSnapIdx < 0 || nextSnapIdx >= segment.polyline.length) {
-          console.error('[snap-reroute] Could not find surrounding snap points')
-          return
-        }
-
-        const prevSnapPoint = segment.polyline[prevSnapIdx]
-        const nextSnapPoint = segment.polyline[nextSnapIdx]
-
-        // Re-route from previous snap point through new snapped location to next snap point
-        const routeResult = await routeBetweenPoints(
-          prevSnapPoint[0],
-          prevSnapPoint[1],
-          snappedResult.point[1],
-          snappedResult.point[0]
-        )
-
-        if (!routeResult?.polyline) {
-          console.error('[snap-reroute] Re-routing failed')
-          return
-        }
-
-        // Rebuild polyline maintaining order: preserve all snap points, replace intermediate section
-        const newPolyline: [number, number][] = []
-
-        // Add all points up to and including previous snap point
-        for (let i = 0; i <= prevSnapIdx; i++) {
-          newPolyline.push(segment.polyline[i])
-        }
-
-        // Add new route points (convert [lon,lat] to [lat,lng])
-        for (const routePoint of routeResult.polyline) {
-          newPolyline.push([routePoint[1], routePoint[0]])
-        }
-
-        // Add all remaining points from next snap point onward
-        for (let i = nextSnapIdx; i < segment.polyline.length; i++) {
-          newPolyline.push(segment.polyline[i])
-        }
-
-        console.log('[snap-reroute] Updated polyline:', segment.polyline.length, '→', newPolyline.length, 'points')
-
-        // Update segment with new polyline
-        stagedRef.current?.applyEdit?.((prev) => {
-          const idx = prev.findIndex((s) => s.id === segment.id)
-          if (idx === -1) return prev
-          const updated = [...prev]
-          updated[idx] = { ...segment, polyline: newPolyline }
-          return updated
-        })
-
-        // Update intermediate tracking: all new route points become intermediate
-        const newIntermediates = new Set<number>()
-        for (let i = 0; i < routeResult.polyline.length; i++) {
-          newIntermediates.add(prevSnapIdx + 1 + i)
-        }
-        intermediatePointsRef.current.set(segment.id, newIntermediates)
-        console.log('[snap-reroute] New intermediate indices:', Array.from(newIntermediates))
-      } catch (err) {
-        console.error('[snap-reroute] Error:', err)
-      }
-    },
-    []
-  )
 
   /** Locate + basemap tools under native zoom; basemap panel lists styles and persists via {@link writeStoredBasemapStyle}. */
   const installTopLeftToolControls = useCallback((map: L.Map) => {
@@ -823,27 +734,6 @@ export default function LeafletMap({
                   console.log('[snap] Route polyline length:', routeResult?.polyline?.length ?? 'undefined')
                   if (routeResult && routeResult.polyline && routeResult.polyline.length >= 1) {
                     console.log('[snap] Adding', routeResult.polyline.length, 'route points')
-
-                    // Track which indices will be intermediate points
-                    const activeSegment = stagedRef.current?.activeDrawSegment
-                    if (activeSegment) {
-                      const startIdx = activeSegment.polyline.length
-                      const intermediateIndices = new Set<number>()
-
-                      // Mark all route points as intermediate
-                      for (let i = 0; i < routeResult.polyline.length; i++) {
-                        intermediateIndices.add(startIdx + i)
-                      }
-
-                      if (!intermediatePointsRef.current.has(activeSegment.id)) {
-                        intermediatePointsRef.current.set(activeSegment.id, new Set())
-                      }
-                      intermediatePointsRef.current.get(activeSegment.id)!.forEach(idx => intermediateIndices.add(idx))
-                      intermediatePointsRef.current.set(activeSegment.id, intermediateIndices)
-
-                      console.log('[snap] Marked indices as intermediate:', Array.from(intermediateIndices))
-                    }
-
                     // Convert all route points [lon, lat] to [lat, lon] and add in batch
                     const routePoints = routeResult.polyline.map((point) => [point[1], point[0]] as [number, number])
                     stagedRef.current?.appendDrawPoints(routePoints)
@@ -1578,25 +1468,12 @@ export default function LeafletMap({
         iconAnchor: [4, 4],
       })
 
-      // Icon for intermediate (API-generated) route points - smaller, muted
-      const intermediatePointIcon = L.divIcon({
-        className: '',
-        html: drawTrailNodeDivHtml(4, 'rgba(59, 130, 246, 0.6)', MAP),
-        iconSize: [4, 4],
-        iconAnchor: [2, 2],
-      })
-
       drawPts.forEach((pt, i) => {
-        const isIntermediate = intermediatePointsRef.current
-          .get(activeDrawSeg.id)?.has(i) ?? false
-        const icon = isIntermediate ? intermediatePointIcon : nodeIcon
-        const isDraggableInCurrentTool = tool === 'pencil' || (tool === 'snap' && isIntermediate)
-
         const marker = L.marker(pt as L.LatLngExpression, {
-          icon,
+          icon: nodeIcon,
           interactive: true,
-          draggable: isDraggableInCurrentTool,
-          zIndexOffset: isIntermediate ? 500 : 1000, // Intermediate points layer below snap points
+          draggable: tool === 'pencil' || tool === 'snap',
+          zIndexOffset: 1000,
         })
         if (tool === 'eraser') {
           marker.on('click', (e: L.LeafletMouseEvent) => {
@@ -1656,12 +1533,14 @@ export default function LeafletMap({
             popup.setLatLng(marker.getLatLng()).setContent(popupContent).openOn(mapInstance)
           })
         }
-        if (tool === 'snap' && isIntermediate) {
+        if (tool === 'snap') {
           marker.on('dragend', async () => {
-            marker.dragging?.disable()
             const { lat, lng } = marker.getLatLng()
-            await handleIntermediatePointDrag(i, lat, lng, activeDrawSeg)
-            marker.dragging?.enable()
+            // Snap dragged point to nearest way
+            const snapped = await snapToNearestWay(lat, lng, 50)
+            if (snapped) {
+              staged.moveDrawPoint(i, [snapped.point[1], snapped.point[0]])
+            }
           })
         }
         if (tool === 'section-eraser') {
@@ -2191,12 +2070,6 @@ export default function LeafletMap({
       setSnapFirstPoint(null)
     }
   }, [drawToolActive, staged?.segments.length])
-
-  // Clear intermediate point tracking when undo/redo occurs
-  useEffect(() => {
-    // Reset intermediate tracking when segment structure changes (undo/redo)
-    intermediatePointsRef.current.clear()
-  }, [staged?.segments.map(s => `${s.id}:${s.polyline.length}`).join('|')])
 
   return (
     <div className="relative w-full h-full">
