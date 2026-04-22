@@ -731,7 +731,8 @@ export default function LeafletMap({
               )
                 .then((routeResult) => {
                   console.log('[snap] Route result:', routeResult)
-                  if (routeResult && routeResult.polyline && routeResult.polyline.length >= 2) {
+                  console.log('[snap] Route polyline length:', routeResult?.polyline?.length ?? 'undefined')
+                  if (routeResult && routeResult.polyline && routeResult.polyline.length >= 1) {
                     console.log('[snap] Adding', routeResult.polyline.length, 'route points')
                     // Convert all route points [lon, lat] to [lat, lon] and add in batch
                     const routePoints = routeResult.polyline.map((point) => [point[1], point[0]] as [number, number])
@@ -739,7 +740,7 @@ export default function LeafletMap({
                     setSnapFirstPoint(null)
                     setSnapLoading(false)
                   } else {
-                    console.error('[snap] Route failed: no valid path found between points')
+                    console.error('[snap] Route failed: polyline too short or invalid', { polyline: routeResult?.polyline })
                     setSnapFirstPoint(null)
                     setSnapLoading(false)
                     // Don't add fallback line - let user retry
