@@ -712,7 +712,7 @@ export default function LeafletMap({
 
               // If this is first point, save it
               if (snapFirstPointRef.current === null) {
-                console.log('[snap] First point saved')
+                console.log('[snap] First point saved:', snappedPoint)
                 setSnapFirstPoint(snappedPoint)
                 stagedRef.current?.appendDrawPoint(snappedPoint)
                 setSnapLoading(false)
@@ -720,6 +720,8 @@ export default function LeafletMap({
               }
 
               // Second point: route between them
+              console.log('[snap] snapFirstPointRef.current:', snapFirstPointRef.current)
+              console.log('[snap] snappedPoint:', snappedPoint)
               console.log('[snap] Routing from', snapFirstPointRef.current, 'to', snappedPoint)
               routeBetweenPoints(
                 snapFirstPointRef.current[0],
