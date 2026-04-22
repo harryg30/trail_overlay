@@ -348,8 +348,12 @@ export default function LeafletMap({
         console.log('[snap-reroute] Snapped to:', snappedResult.point)
 
         const intermediates = intermediatePointsRef.current.get(segment.id) || new Set()
+
+        // Find previous snap point (non-intermediate)
         let prevSnapIdx = pointIndex - 1
         while (prevSnapIdx >= 0 && intermediates.has(prevSnapIdx)) prevSnapIdx--
+
+        // Find next snap point (non-intermediate)
         let nextSnapIdx = pointIndex + 1
         while (nextSnapIdx < segment.polyline.length && intermediates.has(nextSnapIdx)) nextSnapIdx++
 
@@ -358,9 +362,13 @@ export default function LeafletMap({
           return
         }
 
+        const prevSnapPoint = segment.polyline[prevSnapIdx]
+        const nextSnapPoint = segment.polyline[nextSnapIdx]
+
+        // Re-route from previous snap point through new snapped location to next snap point
         const routeResult = await routeBetweenPoints(
-          segment.polyline[prevSnapIdx][0],
-          segment.polyline[prevSnapIdx][1],
+          prevSnapPoint[0],
+          prevSnapPoint[1],
           snappedResult.point[1],
           snappedResult.point[0]
         )
@@ -370,22 +378,42 @@ export default function LeafletMap({
           return
         }
 
-        const newIntermediates = new Set(intermediates)
-        for (let idx = prevSnapIdx + 1; idx < nextSnapIdx; idx++) newIntermediates.delete(idx)
+        // Rebuild polyline maintaining order: preserve all snap points, replace intermediate section
+        const newPolyline: [number, number][] = []
+
+        // Add all points up to and including previous snap point
+        for (let i = 0; i <= prevSnapIdx; i++) {
+          newPolyline.push(segment.polyline[i])
+        }
+
+        // Add new route points (convert [lon,lat] to [lat,lng])
+        for (const routePoint of routeResult.polyline) {
+          newPolyline.push([routePoint[1], routePoint[0]])
+        }
+
+        // Add all remaining points from next snap point onward
+        for (let i = nextSnapIdx; i < segment.polyline.length; i++) {
+          newPolyline.push(segment.polyline[i])
+        }
+
+        console.log('[snap-reroute] Updated polyline:', segment.polyline.length, '→', newPolyline.length, 'points')
+
+        // Update segment with new polyline
+        stagedRef.current?.applyEdit?.((prev) => {
+          const idx = prev.findIndex((s) => s.id === segment.id)
+          if (idx === -1) return prev
+          const updated = [...prev]
+          updated[idx] = { ...segment, polyline: newPolyline }
+          return updated
+        })
+
+        // Update intermediate tracking: all new route points become intermediate
+        const newIntermediates = new Set<number>()
         for (let i = 0; i < routeResult.polyline.length; i++) {
           newIntermediates.add(prevSnapIdx + 1 + i)
         }
-
-        const newPolyline: [number, number][] = segment.polyline.slice(0, prevSnapIdx + 1)
-        for (const p of routeResult.polyline) newPolyline.push([p[1], p[0]])
-        newPolyline.push(...segment.polyline.slice(nextSnapIdx))
-
-        stagedRef.current?.applyEdit?.((prev) => {
-          const idx = prev.findIndex((s) => s.id === segment.id)
-          return idx === -1 ? prev : [...prev.slice(0, idx), { ...segment, polyline: newPolyline }, ...prev.slice(idx + 1)]
-        })
-
         intermediatePointsRef.current.set(segment.id, newIntermediates)
+        console.log('[snap-reroute] New intermediate indices:', Array.from(newIntermediates))
       } catch (err) {
         console.error('[snap-reroute] Error:', err)
       }
@@ -2163,6 +2191,12 @@ export default function LeafletMap({
       setSnapFirstPoint(null)
     }
   }, [drawToolActive, staged?.segments.length])
+
+  // Clear intermediate point tracking when undo/redo occurs
+  useEffect(() => {
+    // Reset intermediate tracking when segment structure changes (undo/redo)
+    intermediatePointsRef.current.clear()
+  }, [staged?.segments.map(s => `${s.id}:${s.polyline.length}`).join('|')])
 
   return (
     <div className="relative w-full h-full">
