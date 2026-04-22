@@ -26,6 +26,7 @@ import { AddTrailPanel } from '@/components/trail/AddTrailPanel'
 import { resolveMapCursor } from '@/lib/modes/map-cursor'
 import { snapToNearestTrailPoint } from '@/lib/geo-utils'
 import { nearestPolylineSegment } from '@/lib/geo-edit'
+import { snapToNearestWay, routeBetweenPoints } from '@/lib/valhalla-utils'
 import { attachVertexInsertHoverCursor } from '@/lib/map-vertex-insert-cursor'
 import {
   MAP,
@@ -227,6 +228,8 @@ export default function LeafletMap({
   const LABEL_ZOOM_THRESHOLD = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches ? 14 : 15
   const isCoarsePointer = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number; accuracyM?: number } | null>(null)
+  const [snapFirstPoint, setSnapFirstPoint] = useState<[number, number] | null>(null)
+  const [snapLoading, setSnapLoading] = useState(false)
 
   // Mutable refs — updated in component body so click handlers always read current values
   const trimModeRef = useRef(trimMode)
@@ -244,6 +247,8 @@ export default function LeafletMap({
   const drawToolActiveRef = useRef(drawToolActive)
   const drawToolTypeRef = useRef(staged?.drawTool ?? 'pencil')
   const stagedRef = useRef(staged)
+  const snapFirstPointRef = useRef(snapFirstPoint)
+  const snapLoadingRef = useRef(snapLoading)
   const trailEditToolRef = useRef<TrailEditTool>(trailEditTool)
   const refineModeRef = useRef(refineMode)
   const onRefinePointRemovedRef = useRef(onRefinePointRemoved)
@@ -291,6 +296,8 @@ export default function LeafletMap({
   drawToolActiveRef.current = drawToolActive
   drawToolTypeRef.current = staged?.drawTool ?? 'pencil'
   stagedRef.current = staged
+  snapFirstPointRef.current = snapFirstPoint
+  snapLoadingRef.current = snapLoading
   trailEditToolRef.current = trailEditTool
   refineModeRef.current = refineMode
   onRefinePointRemovedRef.current = onRefinePointRemoved
@@ -680,6 +687,61 @@ export default function LeafletMap({
       if (drawToolActiveRef.current) {
         if (drawToolTypeRef.current === 'pencil') {
           stagedRef.current?.appendDrawPoint([e.latlng.lat, e.latlng.lng])
+        } else if (drawToolTypeRef.current === 'snap') {
+          // Snap tool: first click snaps point, second click routes between two snapped points
+          const clickLat = e.latlng.lat
+          const clickLng = e.latlng.lng
+
+          if (snapLoadingRef.current) return
+
+          setSnapLoading(true)
+
+          snapToNearestWay(clickLat, clickLng, 50)
+            .then((result) => {
+              if (!result) {
+                setSnapLoading(false)
+                return // Could show error toast here
+              }
+
+              // Convert [lon, lat] to [lat, lon]
+              const snappedPoint: [number, number] = [result.point[1], result.point[0]]
+
+              // If this is first point, save it
+              if (snapFirstPointRef.current === null) {
+                setSnapFirstPoint(snappedPoint)
+                stagedRef.current?.appendDrawPoint(snappedPoint)
+                setSnapLoading(false)
+                return
+              }
+
+              // Second point: route between them
+              routeBetweenPoints(
+                snapFirstPointRef.current[0],
+                snapFirstPointRef.current[1],
+                snappedPoint[0],
+                snappedPoint[1]
+              )
+                .then((routeResult) => {
+                  if (routeResult && routeResult.polyline.length >= 2) {
+                    // Add all intermediate points from the route, converting [lon, lat] to [lat, lon]
+                    routeResult.polyline.forEach((point) => {
+                      stagedRef.current?.appendDrawPoint([point[1], point[0]] as [number, number])
+                    })
+                  } else {
+                    // Route failed, just add the snapped point
+                    stagedRef.current?.appendDrawPoint(snappedPoint)
+                  }
+                  setSnapFirstPoint(null)
+                  setSnapLoading(false)
+                })
+                .catch(() => {
+                  setSnapFirstPoint(null)
+                  setSnapLoading(false)
+                })
+            })
+            .catch(() => {
+              setSnapLoading(false)
+            })
         }
         return
       }
@@ -1968,6 +2030,14 @@ export default function LeafletMap({
       })
     }
   }, [stravaToolActive, stravaSegments, staged?.segments]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clean up snap tool state when exiting draw mode or switching tools
+  useEffect(() => {
+    if (!drawToolActive || staged?.drawTool !== 'snap') {
+      setSnapFirstPoint(null)
+      setSnapLoading(false)
+    }
+  }, [drawToolActive, staged?.drawTool])
 
   return (
     <div className="relative w-full h-full">

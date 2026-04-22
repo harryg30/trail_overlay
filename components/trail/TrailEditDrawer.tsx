@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label'
 import { polylineDistanceKm } from '@/lib/geo-utils'
 import { cn } from '@/lib/utils'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faEraser, faPencil, faRotateLeft, faRotateRight, faScissors } from '@fortawesome/free-solid-svg-icons'
+import { faEraser, faPencil, faRotateLeft, faRotateRight, faScissors, faMagnet } from '@fortawesome/free-solid-svg-icons'
 
 const toolBtnActive = 'border-2 border-foreground bg-foreground text-background'
 const toolBtnIdle = 'border-2 border-border bg-card text-foreground hover:bg-mud/80'
@@ -177,6 +177,16 @@ export function TrailEditDrawer({
             >
               <FontAwesomeIcon icon={faScissors} className="w-4 h-4" />
             </button>
+            <button
+              type="button"
+              title="Snap to OSM"
+              aria-label="Snap to OSM tool"
+              aria-pressed={trailEditTool === 'snap'}
+              onClick={() => onSetTool('snap')}
+              className={`${toolBase} ${trailEditTool === 'snap' ? toolBtnActive : toolBtnIdle}`}
+            >
+              <FontAwesomeIcon icon={faMagnet} className="w-4 h-4" />
+            </button>
             <button type="button" className={iconActionBtn} onClick={onUndo} disabled={!canUndo} title="Undo" aria-label="Undo">
               <FontAwesomeIcon icon={faRotateLeft} className="w-4 h-4" />
             </button>
@@ -190,7 +200,9 @@ export function TrailEditDrawer({
           <p className="text-[11px] leading-snug text-muted-foreground">
             {trailEditTool === 'section-eraser'
               ? 'Section eraser: click two points to erase the section between them.'
-              : 'Pencil: click line or drag points to edit; tap midpoints to insert. Eraser: remove a point.'}
+              : trailEditTool === 'snap'
+                ? 'Snap to OSM: click to snap to nearest trail/road. Click a second point to auto-route between them.'
+                : 'Pencil: click line or drag points to edit; tap midpoints to insert. Eraser: remove a point.'}
           </p>
         </div>
       )}
