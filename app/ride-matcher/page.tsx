@@ -160,6 +160,25 @@ export default function RideMatcherPage() {
   }
 
   const currentRound = session.rounds[gameState.round]
+
+  // Debug: Check if API key exists
+  if (!STREET_VIEW_API_KEY) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-red-50">
+        <div className="bg-white rounded p-6 max-w-md text-center">
+          <p className="text-red-600 font-semibold mb-2">⚠️ Configuration Error</p>
+          <p className="text-gray-700 mb-4">
+            NEXT_PUBLIC_MAPS_API_KEY environment variable is not set.
+            Street View cannot load without it.
+          </p>
+          <a href="/" className="text-blue-600 hover:underline">
+            Back to home
+          </a>
+        </div>
+      </div>
+    )
+  }
+
   const streetViewUrl = `https://maps.googleapis.com/maps/api/streetview?size=600x400&location=${currentRound.lat},${currentRound.lng}&heading=auto&pitch=0&key=${STREET_VIEW_API_KEY}`
 
   const handleGuess = async (guessRideId: string) => {
@@ -248,11 +267,18 @@ export default function RideMatcherPage() {
               {/* Street View */}
               <div className="bg-white rounded-lg shadow-lg p-4">
                 <h2 className="text-lg font-semibold mb-2">Where are you?</h2>
-                <img
-                  src={streetViewUrl}
-                  alt="Street View"
-                  className="w-full rounded"
-                />
+                <div className="bg-gray-100 rounded overflow-hidden">
+                  <img
+                    src={streetViewUrl}
+                    alt="Street View"
+                    className="w-full h-96 object-cover"
+                    onError={(e) => {
+                      console.error('Street View image failed to load:', streetViewUrl)
+                      e.currentTarget.src =
+                        'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22600%22 height=%22400%22%3E%3Crect fill=%22%23f0f0f0%22 width=%22600%22 height=%22400%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-family=%22Arial%22 font-size=%2216%22 fill=%22%23999%22%3EStreet View not available%3C/text%3E%3C/svg%3E'
+                    }}
+                  />
+                </div>
               </div>
             </div>
 
