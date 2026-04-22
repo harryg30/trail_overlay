@@ -695,19 +695,24 @@ export default function LeafletMap({
           if (snapLoadingRef.current) return
 
           setSnapLoading(true)
+          console.log('[snap] Attempting snap at', clickLat, clickLng)
 
           snapToNearestWay(clickLat, clickLng, 50)
             .then((result) => {
+              console.log('[snap] Result:', result)
               if (!result) {
+                console.warn('[snap] No snap result - check NEXT_PUBLIC_ORS_API_KEY')
                 setSnapLoading(false)
                 return // Could show error toast here
               }
 
               // Convert [lon, lat] to [lat, lon]
               const snappedPoint: [number, number] = [result.point[1], result.point[0]]
+              console.log('[snap] Snapped to:', snappedPoint)
 
               // If this is first point, save it
               if (snapFirstPointRef.current === null) {
+                console.log('[snap] First point saved')
                 setSnapFirstPoint(snappedPoint)
                 stagedRef.current?.appendDrawPoint(snappedPoint)
                 setSnapLoading(false)
@@ -715,6 +720,7 @@ export default function LeafletMap({
               }
 
               // Second point: route between them
+              console.log('[snap] Routing from', snapFirstPointRef.current, 'to', snappedPoint)
               routeBetweenPoints(
                 snapFirstPointRef.current[0],
                 snapFirstPointRef.current[1],
@@ -722,6 +728,7 @@ export default function LeafletMap({
                 snappedPoint[1]
               )
                 .then((routeResult) => {
+                  console.log('[snap] Route result:', routeResult)
                   if (routeResult && routeResult.polyline.length >= 2) {
                     // Add all intermediate points from the route, converting [lon, lat] to [lat, lon]
                     routeResult.polyline.forEach((point) => {
@@ -734,12 +741,14 @@ export default function LeafletMap({
                   setSnapFirstPoint(null)
                   setSnapLoading(false)
                 })
-                .catch(() => {
+                .catch((err) => {
+                  console.error('[snap] Route error:', err)
                   setSnapFirstPoint(null)
                   setSnapLoading(false)
                 })
             })
-            .catch(() => {
+            .catch((err) => {
+              console.error('[snap] Snap error:', err)
               setSnapLoading(false)
             })
         }

@@ -21,6 +21,7 @@ import {
   faScissors,
   faUpload,
   faXmark,
+  faMagnet,
 } from '@fortawesome/free-solid-svg-icons'
 import { uploadRideFilesClient } from '@/lib/upload-rides-client'
 
@@ -312,6 +313,9 @@ function DrawTools({
       <button type="button" title="Section eraser" className={toolBtn(drawTool === 'section-eraser')} onClick={() => onSetDrawTool('section-eraser')}>
         <FontAwesomeIcon icon={faScissors} className="h-3 w-3" />
       </button>
+      <button type="button" title="Snap to OSM" className={toolBtn(drawTool === 'snap')} onClick={() => onSetDrawTool('snap')}>
+        <FontAwesomeIcon icon={faMagnet} className="h-3 w-3" />
+      </button>
       {hasSegments && (
         <>
           <span className="mx-1 h-4 w-px bg-border" />
@@ -346,9 +350,11 @@ function DrawTools({
       <p className="ml-auto max-w-[12rem] text-right text-[10px] leading-snug text-muted-foreground">
         {drawTool === 'section-eraser'
           ? 'Click two points to erase between'
-          : hasSegments
-            ? (activeEnd === 'start' ? 'Drawing from start' : 'Drawing from end')
-            : 'Click map to draw'}
+          : drawTool === 'snap'
+            ? 'Click to snap to road; click 2nd point to auto-route'
+            : hasSegments
+              ? (activeEnd === 'start' ? 'Drawing from start' : 'Drawing from end')
+              : 'Click map to draw'}
         {drawTool === 'pencil' && hasSegments && ' · Pencil: tap line/midpoint to insert; right-click a point to trim toward start or end.'}
       </p>
     </div>

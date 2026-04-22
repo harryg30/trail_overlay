@@ -1,10 +1,7 @@
 /**
  * Valhalla API utilities for snapping to trails and routing between points.
- * Uses OpenRouteService's public Valhalla instance.
+ * Uses server-side proxy to OpenRouteService's Valhalla instance.
  */
-
-const VALHALLA_BASE = 'https://api.openrouteservice.org/v2'
-const ORS_API_KEY = process.env.NEXT_PUBLIC_ORS_API_KEY
 
 interface ValhallaNearestResponse {
   edges: Array<{
@@ -50,27 +47,21 @@ export interface RouteResult {
 }
 
 /**
- * Snap a point to the nearest trail/road using Valhalla.
- * Tries Valhalla first, falls back to error handling if unavailable.
+ * Snap a point to the nearest trail/road using server-side Valhalla proxy.
  */
 export async function snapToNearestWay(
   lat: number,
   lng: number,
   radiusMeters = 50,
 ): Promise<SnapResult | null> {
-  if (!ORS_API_KEY) {
-    console.warn('NEXT_PUBLIC_ORS_API_KEY not set; snapping disabled')
-    return null
-  }
-
   try {
-    const response = await fetch(`${VALHALLA_BASE}/nearest?api_key=${ORS_API_KEY}`, {
+    const response = await fetch('/api/valhalla/snap', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        location: [lng, lat],
-        preference: 'bicycle',
-        radius_meters: radiusMeters,
+        lat,
+        lng,
+        radiusMeters,
       }),
     })
 
@@ -96,8 +87,7 @@ export async function snapToNearestWay(
 }
 
 /**
- * Route between two points using Valhalla, snapping to bicycle-friendly ways.
- * Returns the polyline and all OSM way IDs touched along the route.
+ * Route between two points using server-side Valhalla proxy, snapping to bicycle-friendly ways.
  */
 export async function routeBetweenPoints(
   startLat: number,
@@ -105,24 +95,15 @@ export async function routeBetweenPoints(
   endLat: number,
   endLng: number,
 ): Promise<RouteResult | null> {
-  if (!ORS_API_KEY) {
-    console.warn('NEXT_PUBLIC_ORS_API_KEY not set; routing disabled')
-    return null
-  }
-
   try {
-    const response = await fetch(`${VALHALLA_BASE}/directions?api_key=${ORS_API_KEY}`, {
+    const response = await fetch('/api/valhalla/route', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        coordinates: [
-          [startLng, startLat],
-          [endLng, endLat],
-        ],
-        profile: 'cycling-regular',
-        geometry: true,
-        instructions: false,
-        preference: 'bicycle',
+        startLat,
+        startLng,
+        endLat,
+        endLng,
       }),
     })
 
