@@ -729,12 +729,15 @@ export default function LeafletMap({
               )
                 .then((routeResult) => {
                   console.log('[snap] Route result:', routeResult)
-                  if (routeResult && routeResult.polyline.length >= 2) {
-                    // Add all intermediate points from the route, converting [lon, lat] to [lat, lon]
-                    routeResult.polyline.forEach((point) => {
+                  if (routeResult && routeResult.polyline && routeResult.polyline.length >= 2) {
+                    console.log('[snap] Adding', routeResult.polyline.length, 'route points')
+                    // Add all route points, converting [lon, lat] to [lat, lon]
+                    routeResult.polyline.forEach((point, idx) => {
+                      console.log('[snap] Adding point', idx, ':', point)
                       stagedRef.current?.appendDrawPoint([point[1], point[0]] as [number, number])
                     })
                   } else {
+                    console.warn('[snap] Route invalid:', routeResult)
                     // Route failed, just add the snapped point
                     stagedRef.current?.appendDrawPoint(snappedPoint)
                   }
