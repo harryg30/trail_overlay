@@ -2054,6 +2054,13 @@ export default function LeafletMap({
     }
   }, [drawToolActive, staged?.drawTool])
 
+  // Clear snap state when trail is cleared
+  useEffect(() => {
+    if (drawToolActive && staged?.segments.length === 0) {
+      setSnapFirstPoint(null)
+    }
+  }, [drawToolActive, staged?.segments.length])
+
   return (
     <div className="relative w-full h-full">
       <div
