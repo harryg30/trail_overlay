@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
   try {
     const { startLat, startLng, endLat, endLng } = await req.json()
 
-    const response = await fetch(`${ORS_BASE}/v2/directions/cycling-electric`, {
+    const response = await fetch(`${ORS_BASE}/v2/directions/cycling-regular`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

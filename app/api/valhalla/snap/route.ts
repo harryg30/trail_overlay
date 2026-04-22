@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
   try {
     const { lat, lng, radiusMeters = 50 } = await req.json()
 
-    const response = await fetch(`${ORS_BASE}/v2/snap/cycling-electric`, {
+    const response = await fetch(`${ORS_BASE}/v2/snap/cycling-regular`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
