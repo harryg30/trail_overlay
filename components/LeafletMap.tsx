@@ -737,7 +737,8 @@ export default function LeafletMap({
                     // Convert all route points [lon, lat] to [lat, lon] and add in batch
                     const routePoints = routeResult.polyline.map((point) => [point[1], point[0]] as [number, number])
                     stagedRef.current?.appendDrawPoints(routePoints)
-                    setSnapFirstPoint(null)
+                    // Continue from the second point so next click routes from here
+                    setSnapFirstPoint(snappedPoint)
                     setSnapLoading(false)
                   } else {
                     console.error('[snap] Route failed: polyline too short or invalid', { polyline: routeResult?.polyline })
