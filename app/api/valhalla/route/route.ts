@@ -3,6 +3,48 @@ import { NextRequest, NextResponse } from 'next/server'
 const ORS_BASE = 'https://api.openrouteservice.org'
 const ORS_API_KEY = process.env.NEXT_PUBLIC_ORS_API_KEY
 
+/**
+ * Decode a Google-encoded polyline to coordinates
+ * https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+ */
+function decodePolyline(encoded: string): [number, number][] {
+  const points: [number, number][] = []
+  let index = 0
+  let lat = 0
+  let lng = 0
+
+  while (index < encoded.length) {
+    let result = 0
+    let shift = 0
+    let byte
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63
+      result |= (byte & 0x1f) << shift
+      shift += 5
+    } while (byte >= 0x20)
+
+    const dlat = result & 1 ? ~(result >> 1) : result >> 1
+    lat += dlat
+
+    result = 0
+    shift = 0
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63
+      result |= (byte & 0x1f) << shift
+      shift += 5
+    } while (byte >= 0x20)
+
+    const dlng = result & 1 ? ~(result >> 1) : result >> 1
+    lng += dlng
+
+    points.push([lng / 1e5, lat / 1e5])
+  }
+
+  return points
+}
+
 export async function POST(req: NextRequest) {
   if (!ORS_API_KEY) {
     return NextResponse.json({ error: 'API key not configured' }, { status: 500 })
@@ -46,16 +88,18 @@ export async function POST(req: NextRequest) {
     }
 
     const route = data.routes[0]
+    const coordinates = decodePolyline(route.geometry)
+
     const transformed = {
       routes: [{
         geometry: {
-          coordinates: route.geometry.coordinates,
+          coordinates,
         },
         legs: [{
-          steps: route.segments?.map((seg: any) => ({
-            way_name: seg.name,
-            way_id: 0, // ORS doesn't provide way_id
-          })) || [],
+          steps: [{
+            way_name: 'Trail',
+            way_id: 0,
+          }],
         }],
       }],
     }
