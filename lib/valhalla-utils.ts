@@ -1,22 +1,20 @@
 /**
- * Valhalla API utilities for snapping to trails and routing between points.
- * Uses server-side proxy to OpenRouteService's Valhalla instance.
+ * OpenRouteService API utilities for snapping to trails and routing between points
+ * Proxied through /api/valhalla/* endpoints for auth and rate limiting
  */
 
-interface ValhallaNearestResponse {
-  edges: Array<{
-    id: number
-    way_id: number
-    names?: string[]
-    length: number
-  }>
+interface OrsSnapResponse {
   matched_point: {
     lat: number
     lng: number
   }
+  edges: Array<{
+    way_id?: number // May not be present from ORS
+    names?: string[]
+  }>
 }
 
-interface ValhallaRouteResponse {
+interface OrsRouteResponse {
   routes: Array<{
     geometry: {
       coordinates: [number, number][]
@@ -47,7 +45,7 @@ export interface RouteResult {
 }
 
 /**
- * Snap a point to the nearest trail/road using server-side Valhalla proxy.
+ * Snap a point to the nearest trail/road using OpenRouteService proxy.
  */
 export async function snapToNearestWay(
   lat: number,
@@ -70,7 +68,7 @@ export async function snapToNearestWay(
       throw new Error(`Snap failed: ${response.status}`)
     }
 
-    const data = (await response.json()) as ValhallaNearestResponse
+    const data = (await response.json()) as OrsSnapResponse
     if (!data.matched_point || !data.edges?.[0]) {
       return null
     }
@@ -87,7 +85,7 @@ export async function snapToNearestWay(
 }
 
 /**
- * Route between two points using server-side Valhalla proxy, snapping to bicycle-friendly ways.
+ * Route between two points using OpenRouteService proxy, snapping to bicycle-friendly ways.
  */
 export async function routeBetweenPoints(
   startLat: number,
@@ -112,7 +110,7 @@ export async function routeBetweenPoints(
       throw new Error(`Route failed: ${response.status}`)
     }
 
-    const data = (await response.json()) as ValhallaRouteResponse
+    const data = (await response.json()) as OrsRouteResponse
     const route = data.routes?.[0]
     if (!route?.geometry?.coordinates) {
       return null
@@ -137,7 +135,7 @@ export async function routeBetweenPoints(
 }
 
 /**
- * Route through multiple waypoints using server-side Valhalla proxy.
+ * Route through multiple waypoints using OpenRouteService proxy.
  * Points are in [lat, lng] format and will be converted to [lon, lat] for the API.
  */
 export async function routeThroughPoints(
@@ -165,7 +163,7 @@ export async function routeThroughPoints(
       throw new Error(`Route failed: ${response.status}`)
     }
 
-    const data = (await response.json()) as ValhallaRouteResponse
+    const data = (await response.json()) as OrsRouteResponse
     const route = data.routes?.[0]
     if (!route?.geometry?.coordinates) {
       return null

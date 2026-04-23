@@ -251,10 +251,8 @@ export default function LeafletMap({
   const drawToolActiveRef = useRef(drawToolActive)
   const drawToolTypeRef = useRef(staged?.drawTool ?? 'pencil')
   const stagedRef = useRef(staged)
-  const snapFirstPointRef = useRef(snapFirstPoint)
   const snapLoadingRef = useRef(snapLoading)
   const snapAnchorPointsRef = useRef(snapAnchorPoints)
-  const snapAnchorIndicesRef = useRef(snapAnchorIndices)
   const isRecalculatingRef = useRef(false)
   const trailEditToolRef = useRef<TrailEditTool>(trailEditTool)
   const refineModeRef = useRef(refineMode)
@@ -303,7 +301,6 @@ export default function LeafletMap({
   drawToolActiveRef.current = drawToolActive
   drawToolTypeRef.current = staged?.drawTool ?? 'pencil'
   stagedRef.current = staged
-  snapFirstPointRef.current = snapFirstPoint
   snapLoadingRef.current = snapLoading
   trailEditToolRef.current = trailEditTool
   refineModeRef.current = refineMode
@@ -312,7 +309,6 @@ export default function LeafletMap({
   onRefineSectionEraseRef.current = onRefineSectionErase
   onRefineInsertAfterRef.current = onRefineInsertAfter
   snapAnchorPointsRef.current = snapAnchorPoints
-  snapAnchorIndicesRef.current = snapAnchorIndices
 
   const getResolvedMapCursor = useCallback(
     () =>
@@ -704,25 +700,20 @@ export default function LeafletMap({
           if (snapLoadingRef.current || isRecalculatingRef.current) return
 
           setSnapLoading(true)
-          console.log('[snap] Attempting snap at', clickLat, clickLng)
 
           snapToNearestWay(clickLat, clickLng, 50)
             .then((result) => {
-              console.log('[snap] Result:', result)
               if (!result) {
-                console.warn('[snap] No snap result - check NEXT_PUBLIC_ORS_API_KEY')
                 setSnapLoading(false)
                 return
               }
 
               // Convert [lon, lat] to [lat, lon]
               const snappedPoint: [number, number] = [result.point[1], result.point[0]]
-              console.log('[snap] Snapped to:', snappedPoint)
 
               // Add to anchor points (update state and calculate with updated list)
               const updatedAnchors = [...snapAnchorPointsRef.current, snappedPoint]
               setSnapAnchorPoints(updatedAnchors)
-              console.log('[snap] Updated anchor points:', updatedAnchors.length)
 
               // Always append the snapped point to draw
               stagedRef.current?.appendDrawPoint(snappedPoint)
@@ -730,19 +721,16 @@ export default function LeafletMap({
               // If we have 2+ points, recalculate full route through all of them
               if (updatedAnchors.length >= 2) {
                 isRecalculatingRef.current = true
-                console.log('[snap] Recalculating route through', updatedAnchors.length, 'points')
                 routeThroughPoints(updatedAnchors)
                   .then((routeResult) => {
-                    console.log('[snap] Route result:', routeResult)
                     if (routeResult && routeResult.polyline && routeResult.polyline.length >= 1) {
-                      console.log('[snap] Setting polyline with', routeResult.polyline.length, 'points')
                       // Convert polyline from [lon, lat] to [lat, lng]
                       const latLngPolyline = routeResult.polyline.map((point) => [point[1], point[0]] as [number, number])
                       stagedRef.current?.recalculateDrawSegment(latLngPolyline)
                       setSnapLoading(false)
                       isRecalculatingRef.current = false
                     } else {
-                      console.error('[snap] Route failed: polyline too short or invalid', { polyline: routeResult?.polyline })
+                      console.error('[snap] Route failed: polyline too short or invalid')
                       setSnapLoading(false)
                       isRecalculatingRef.current = false
                     }
@@ -1478,11 +1466,21 @@ export default function LeafletMap({
         iconAnchor: [4, 4],
       })
 
+      // Precompute anchor point lookup set for fast O(1) checking
+      const anchorPointsSet = new Set<string>()
+      if (tool === 'snap') {
+        snapAnchorPointsRef.current.forEach((anchor) => {
+          // Use rounded coordinates as key (to 5 decimal places ~ 1m precision)
+          const key = `${Math.round(anchor[0] * 1e5)},${Math.round(anchor[1] * 1e5)}`
+          anchorPointsSet.add(key)
+        })
+      }
+
       drawPts.forEach((pt, i) => {
         // In snap mode, only render markers for anchor points
-        const isAnchorPoint = tool === 'snap' && snapAnchorPointsRef.current.some(
-          (anchor) => Math.abs(anchor[0] - pt[0]) < 0.00001 && Math.abs(anchor[1] - pt[1]) < 0.00001
-        )
+        const isAnchorPoint =
+          tool === 'snap' &&
+          anchorPointsSet.has(`${Math.round(pt[0] * 1e5)},${Math.round(pt[1] * 1e5)}`)
 
         if (tool === 'snap' && !isAnchorPoint) {
           // Skip rendering markers for non-anchor points in snap mode
@@ -1556,7 +1554,6 @@ export default function LeafletMap({
         if (tool === 'snap') {
           marker.on('dragend', async () => {
             if (isRecalculatingRef.current) {
-              console.log('[snap-drag] Already recalculating, skipping')
               return
             }
 
@@ -1565,7 +1562,6 @@ export default function LeafletMap({
             if (!snapped) return
 
             const snappedLatLng: [number, number] = [snapped.point[1], snapped.point[0]]
-            console.log('[snap-drag] Snapped point', i, 'to', snappedLatLng)
 
             // Find the closest anchor point to the dragged position
             const anchors = snapAnchorPointsRef.current
@@ -1573,13 +1569,11 @@ export default function LeafletMap({
             let closestDistance = Infinity
 
             if (anchors.length > 0) {
-              console.log('[snap-drag] Checking', anchors.length, 'anchor points against dragged point:', lat, lng)
               for (let j = 0; j < anchors.length; j++) {
                 const [aLat, aLng] = anchors[j]
                 const latDiff = Math.abs(aLat - lat)
                 const lngDiff = Math.abs(aLng - lng)
                 const distance = Math.sqrt(latDiff * latDiff + lngDiff * lngDiff)
-                console.log('[snap-drag]   Anchor', j, ':', aLat, aLng, 'distance:', distance.toFixed(6))
 
                 // Find closest anchor (within ~300m, which is 0.003 degrees at equator)
                 if (distance < closestDistance && distance < 0.003) {
@@ -1589,12 +1583,8 @@ export default function LeafletMap({
               }
             }
 
-            console.log('[snap-drag] Anchor count:', anchors.length, 'matching index:', matchingAnchorIndex, 'distance:', closestDistance.toFixed(6))
-
             if (matchingAnchorIndex >= 0) {
               // This is an anchor point - recalculate only affected segments
-              console.log('[snap-drag] Point', i, 'matched anchor point', matchingAnchorIndex)
-
               // Update the anchor point
               const updatedAnchors = [...anchors]
               updatedAnchors[matchingAnchorIndex] = snappedLatLng
@@ -1606,13 +1596,10 @@ export default function LeafletMap({
               // Segment before: (anchor[i-1] → updated anchor[i])
               // Segment after: (updated anchor[i] → anchor[i+1])
               const newPolyline: [number, number][] = []
-              console.log('[snap-drag] Building polyline from', updatedAnchors.length, 'anchors')
 
               for (let segIdx = 0; segIdx < updatedAnchors.length - 1; segIdx++) {
                 const fromAnchor = updatedAnchors[segIdx]
                 const toAnchor = updatedAnchors[segIdx + 1]
-
-                console.log('[snap-drag] Segment', segIdx, ':', fromAnchor, '→', toAnchor)
 
                 // Route this segment
                 const routeResult = await routeBetweenPoints(
@@ -1625,17 +1612,14 @@ export default function LeafletMap({
                 if (routeResult && routeResult.polyline && routeResult.polyline.length >= 1) {
                   // Convert from [lon, lat] to [lat, lng]
                   const latLngSegment = routeResult.polyline.map((point) => [point[1], point[0]] as [number, number])
-                  console.log('[snap-drag] Route segment', segIdx, 'has', latLngSegment.length, 'points')
 
                   if (segIdx === 0) {
                     // First segment - include all points
                     newPolyline.push(...latLngSegment)
-                    console.log('[snap-drag] Added first segment, polyline now', newPolyline.length, 'points')
                   } else {
                     // Subsequent segments - skip first point to avoid duplication at anchor
                     // But keep the last point which is the endpoint
                     newPolyline.push(...latLngSegment.slice(1))
-                    console.log('[snap-drag] Added segment', segIdx, 'skipping first point, polyline now', newPolyline.length, 'points')
                   }
                 } else {
                   console.error('[snap-drag] Route segment', segIdx, 'failed')
@@ -1652,12 +1636,10 @@ export default function LeafletMap({
                 const lngDiff = Math.abs(lastPoint[1] - finalAnchor[1])
                 if (latDiff > 0.00001 || lngDiff > 0.00001) {
                   // Last point differs from final anchor - replace it to ensure accuracy
-                  console.log('[snap-drag] Last point differs from final anchor, updating')
                   newPolyline[newPolyline.length - 1] = finalAnchor
                 }
               }
 
-              console.log('[snap-drag] Final polyline:', newPolyline.length, 'points, anchors:', updatedAnchors.map(p => p.toString()).join(' → '))
               stagedRef.current?.recalculateDrawSegment(newPolyline)
               isRecalculatingRef.current = false
             } else {

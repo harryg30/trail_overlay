@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getSessionUserId } from '@/lib/auth'
 
 const ORS_BASE = 'https://api.openrouteservice.org'
-const ORS_API_KEY = process.env.NEXT_PUBLIC_ORS_API_KEY
+const ORS_API_KEY = process.env.ORS_API_KEY
 
 /**
  * Decode a Google-encoded polyline to coordinates
@@ -46,6 +47,12 @@ function decodePolyline(encoded: string): [number, number][] {
 }
 
 export async function POST(req: NextRequest) {
+  // Check authentication
+  const userId = await getSessionUserId()
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   if (!ORS_API_KEY) {
     return NextResponse.json({ error: 'API key not configured' }, { status: 500 })
   }
@@ -53,21 +60,18 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const { startLat, startLng, endLat, endLng, coordinates } = body
-    console.log('[valhalla-route] Request body:', { startLat, startLng, endLat, endLng, coordCount: Array.isArray(coordinates) ? coordinates.length : 'N/A' })
 
     // Support both legacy two-point and new multi-point formats
     let coordArray: [number, number][]
     if (coordinates && Array.isArray(coordinates)) {
       // New format: coordinates = [[lon, lat], [lon, lat], ...]
       coordArray = coordinates
-      console.log('[valhalla-route] Using multi-point format with', coordArray.length, 'points')
     } else if (startLat !== undefined && startLng !== undefined && endLat !== undefined && endLng !== undefined) {
       // Legacy format: individual lat/lng params
       coordArray = [
         [startLng, startLat],
         [endLng, endLat],
       ]
-      console.log('[valhalla-route] Using legacy two-point format')
     } else {
       return NextResponse.json({ error: 'Missing coordinates or startLat/Lng/endLat/endLng parameters' }, { status: 400 })
     }
@@ -84,8 +88,6 @@ export async function POST(req: NextRequest) {
         instructions: false,
       }),
     })
-
-    console.log('[valhalla-route] ORS request sent with', coordArray.length, 'coordinates')
 
     if (!response.ok) {
       if (response.status === 429) {

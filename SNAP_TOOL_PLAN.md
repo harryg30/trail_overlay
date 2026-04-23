@@ -12,49 +12,18 @@
 
 ## Remaining Work
 
-### 1. Add Snap Tool Click Handler (LeafletMap.tsx)
-**Location:** Around line 687-691 in the map click handler  
-**Task:** Add snap tool case after pencil tool check
+Core snap-tool implementation is complete in `LeafletMap.tsx`. The implementation includes:
+- Snap click handler that intelligently routes through all waypoints
+- Anchor point tracking and visual distinction
+- Drag-and-drop rerouting for anchor points
+- Proper async state management
 
-```
-if (drawToolActiveRef.current) {
-  if (drawToolTypeRef.current === 'pencil') {
-    stagedRef.current?.appendDrawPoint([e.latlng.lat, e.latlng.lng])
-  } else if (drawToolTypeRef.current === 'snap') {
-    // HANDLE SNAP TOOL HERE
-    // 1. If snapFirstPointRef.current is null
-    //    - Call snapToNearestWay(lat, lng)
-    //    - Save result as first point
-    //    - Show visual feedback
-    // 2. If snapFirstPointRef.current is set
-    //    - Call routeBetweenPoints(first, second) 
-    //    - Append both points to draw
-    //    - Clear snapFirstPointRef
-  }
-  return
-}
-```
-
-### 2. Create Async Snap Handler Function
-**Location:** Before map initialization in LeafletMap  
-**Task:** Create `handleSnapClick` async function
-- Takes click coordinates
-- Calls snapToNearestWay or routeBetweenPoints
-- Updates state (snapFirstPoint, snapLoading)
-- Appends points to staged trail
-- Handles errors gracefully
-
-### 3. Clear Snap State on Mode Change
-**Location:** When exiting draw mode in LeafletMap  
-**Task:** Add cleanup to clear snapFirstPoint when user exits snap tool
-
-### 4. Visual Feedback (Optional)
+### 1. Visual Feedback (Optional UX Enhancement)
 **Location:** New useEffect in LeafletMap  
-**Task:** Show marker/line for first snap point while waiting for second click
+**Task:** Show marker/line for first snap point while waiting for second click (improved visual feedback during multi-point selection)
 
-## Key Notes
-- Snap tool logic is **async** → must use async handler, not inline
-- Use refs to preserve state in click handler
-- snapLoading prevents duplicate requests
-- Clear snapFirstPoint after routing completes
-- Valhalla functions already handle API errors
+## Key Implementation Notes
+- Snap tool click handling is implemented via async handler in `LeafletMap.tsx`
+- `snapLoading` prevents duplicate requests
+- Snap state clears after all routes complete and when leaving the tool
+- Anchor points are tracked and distinct from routed polyline points

@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getSessionUserId } from '@/lib/auth'
 
 const ORS_BASE = 'https://api.openrouteservice.org'
-const ORS_API_KEY = process.env.NEXT_PUBLIC_ORS_API_KEY
+const ORS_API_KEY = process.env.ORS_API_KEY
 
 export async function POST(req: NextRequest) {
+  // Check authentication
+  const userId = await getSessionUserId()
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   if (!ORS_API_KEY) {
     return NextResponse.json({ error: 'API key not configured' }, { status: 500 })
   }

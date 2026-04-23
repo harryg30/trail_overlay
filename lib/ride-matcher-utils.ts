@@ -1,5 +1,4 @@
 import { Ride } from './types'
-import { resamplePolyline } from './geo-utils'
 
 const ROUNDS_PER_GAME = 5
 
@@ -18,9 +17,9 @@ export interface GameSession {
 }
 
 /**
- * Create a game session: randomly select 5+ rides and pick a random point from each
+ * Create a game session: randomly select N rides and pick a random point from each
  * No uniqueness requirement - multiple rides can share the same location
- * @param rides All rides from user (min 5 required)
+ * @param rides All rides from user (min roundsPerGame required)
  * @param roundsPerGame Number of rounds (default 5)
  * @returns Game session ready for client
  */
@@ -28,8 +27,12 @@ export function createGameSession(
   rides: Ride[],
   roundsPerGame = ROUNDS_PER_GAME
 ): GameSession {
-  if (rides.length < 5) {
-    throw new Error(`Need at least 5 rides. You have ${rides.length}.`)
+  if (roundsPerGame < 1) {
+    throw new Error(`roundsPerGame must be at least 1`)
+  }
+
+  if (rides.length < roundsPerGame) {
+    throw new Error(`Need at least ${roundsPerGame} rides. You have ${rides.length}.`)
   }
 
   // Shuffle and take N rides

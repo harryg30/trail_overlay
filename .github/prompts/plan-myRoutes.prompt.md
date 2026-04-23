@@ -1,7 +1,3 @@
-+
-−
-￼
-￼
 ## Plan: My Routes Filesystem MVP
 
 Build a new authenticated full-page experience at /my-routes that syncs and displays Strava-created routes, then lets users organize those synced routes into a virtual folder tree stored in the app database. Phase 1 is read-only against Strava route data (sync + display) with local folder assignment only; no route editing or push-back to Strava.

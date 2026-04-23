@@ -217,7 +217,7 @@ export default function RideMatcherPage() {
     const newPoint = ride.polyline[randomIdx]
 
     setCurrentPoint({ lat: newPoint[0], lng: newPoint[1] })
-    setStreetViewAttempts(streetViewAttempts + 1)
+    setStreetViewAttempts((n) => n + 1)
   }
 
   const handleGuess = async (guessRideId: string) => {
@@ -231,6 +231,7 @@ export default function RideMatcherPage() {
           guessRideId,
           round: gameState.round,
           guessCount: gameState.guessCount,
+          totalScore: gameState.totalScore,
         }),
       })
 
@@ -283,7 +284,7 @@ export default function RideMatcherPage() {
     }
   }
 
-  const isGameOver = gameState.round >= session.rounds.length
+  const isGameOver = gameState.gameOver
   const remainingGuesses = 3 - gameState.guessCount
 
   return (

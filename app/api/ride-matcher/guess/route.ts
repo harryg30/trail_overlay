@@ -3,6 +3,8 @@ import { getSessionUserId } from '@/lib/auth'
 import { GameSession } from '@/lib/ride-matcher-utils'
 
 // In-memory session storage (simple for friend group scale)
+// TODO: Move to persistent storage (DB/Redis) for production serverless environments
+// In-memory Map won't work across function instances in serverless deployments
 const sessions = new Map<string, { session: GameSession; expiresAt: number }>()
 const SESSION_TTL = 30 * 60 * 1000 // 30 minutes
 
@@ -39,6 +41,7 @@ interface GuessRequest {
   guessRideId: string
   round: number
   guessCount: number
+  totalScore: number // Cumulative score from client
 }
 
 interface GuessResponse {
@@ -62,13 +65,14 @@ export async function POST(req: NextRequest) {
     }
 
     const body: GuessRequest = await req.json()
-    const { sessionId, guessRideId, round, guessCount } = body
+    const { sessionId, guessRideId, round, guessCount, totalScore } = body
 
     if (
       !sessionId ||
       !guessRideId ||
       typeof round !== 'number' ||
-      typeof guessCount !== 'number'
+      typeof guessCount !== 'number' ||
+      typeof totalScore !== 'number'
     ) {
       return NextResponse.json(
         { error: 'Missing or invalid required fields' },
@@ -115,9 +119,10 @@ export async function POST(req: NextRequest) {
         lng: nextRoundData.lng,
       }
     } else if (shouldMoveToNext && isLastRound) {
-      // Game over
-      response.finalScore = score
-      response.shareLink = `/ride-matcher?score=${score}`
+      // Game over - use cumulative score from client
+      const finalScore = totalScore + score
+      response.finalScore = finalScore
+      response.shareLink = `/ride-matcher?score=${finalScore}`
     }
 
     return NextResponse.json(response)

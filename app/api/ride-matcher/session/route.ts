@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
       elevation: row.elevation,
       polyline: row.polyline,
       pointCount: row.point_count,
-      timestamp: row.timestamp ? new Date(row.timestamp) : new Date(0),
+      ...(row.timestamp ? { timestamp: new Date(row.timestamp) } : { timestamp: new Date(0) }),
       stravaActivityId: row.strava_activity_id,
     }))
 
