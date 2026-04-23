@@ -26,6 +26,7 @@ import { AddTrailPanel } from '@/components/trail/AddTrailPanel'
 import { resolveMapCursor } from '@/lib/modes/map-cursor'
 import { snapToNearestTrailPoint } from '@/lib/geo-utils'
 import { nearestPolylineSegment } from '@/lib/geo-edit'
+import { snapToNearestWay, routeBetweenPoints, routeThroughPoints } from '@/lib/valhalla-utils'
 import { attachVertexInsertHoverCursor } from '@/lib/map-vertex-insert-cursor'
 import {
   MAP,
@@ -40,6 +41,8 @@ import {
   networkPolygonLeafletStyle,
   refineNodeDivHtml,
   rideLineColor,
+  snapAnchorPointDivHtml,
+  snapMidpointDivHtml,
   trailLineColor,
   trailMidpointLabelHtml,
 } from '@/lib/map-theme'
@@ -227,6 +230,10 @@ export default function LeafletMap({
   const LABEL_ZOOM_THRESHOLD = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches ? 14 : 15
   const isCoarsePointer = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number; accuracyM?: number } | null>(null)
+  const [snapFirstPoint, setSnapFirstPoint] = useState<[number, number] | null>(null)
+  const [snapLoading, setSnapLoading] = useState(false)
+  const [snapAnchorPoints, setSnapAnchorPoints] = useState<[number, number][]>([])
+  const [snapAnchorIndices, setSnapAnchorIndices] = useState<number[]>([])
 
   // Mutable refs — updated in component body so click handlers always read current values
   const trimModeRef = useRef(trimMode)
@@ -244,6 +251,9 @@ export default function LeafletMap({
   const drawToolActiveRef = useRef(drawToolActive)
   const drawToolTypeRef = useRef(staged?.drawTool ?? 'pencil')
   const stagedRef = useRef(staged)
+  const snapLoadingRef = useRef(snapLoading)
+  const snapAnchorPointsRef = useRef(snapAnchorPoints)
+  const isRecalculatingRef = useRef(false)
   const trailEditToolRef = useRef<TrailEditTool>(trailEditTool)
   const refineModeRef = useRef(refineMode)
   const onRefinePointRemovedRef = useRef(onRefinePointRemoved)
@@ -291,12 +301,14 @@ export default function LeafletMap({
   drawToolActiveRef.current = drawToolActive
   drawToolTypeRef.current = staged?.drawTool ?? 'pencil'
   stagedRef.current = staged
+  snapLoadingRef.current = snapLoading
   trailEditToolRef.current = trailEditTool
   refineModeRef.current = refineMode
   onRefinePointRemovedRef.current = onRefinePointRemoved
   const onRefineSectionEraseRef = useRef(onRefineSectionErase)
   onRefineSectionEraseRef.current = onRefineSectionErase
   onRefineInsertAfterRef.current = onRefineInsertAfter
+  snapAnchorPointsRef.current = snapAnchorPoints
 
   const getResolvedMapCursor = useCallback(
     () =>
@@ -680,6 +692,62 @@ export default function LeafletMap({
       if (drawToolActiveRef.current) {
         if (drawToolTypeRef.current === 'pencil') {
           stagedRef.current?.appendDrawPoint([e.latlng.lat, e.latlng.lng])
+        } else if (drawToolTypeRef.current === 'snap') {
+          // Snap tool: accumulate snapped points and recalculate route through all waypoints
+          const clickLat = e.latlng.lat
+          const clickLng = e.latlng.lng
+
+          if (snapLoadingRef.current || isRecalculatingRef.current) return
+
+          setSnapLoading(true)
+
+          snapToNearestWay(clickLat, clickLng, 50)
+            .then((result) => {
+              if (!result) {
+                setSnapLoading(false)
+                return
+              }
+
+              // Convert [lon, lat] to [lat, lon]
+              const snappedPoint: [number, number] = [result.point[1], result.point[0]]
+
+              // Add to anchor points (update state and calculate with updated list)
+              const updatedAnchors = [...snapAnchorPointsRef.current, snappedPoint]
+              setSnapAnchorPoints(updatedAnchors)
+
+              // Always append the snapped point to draw
+              stagedRef.current?.appendDrawPoint(snappedPoint)
+
+              // If we have 2+ points, recalculate full route through all of them
+              if (updatedAnchors.length >= 2) {
+                isRecalculatingRef.current = true
+                routeThroughPoints(updatedAnchors)
+                  .then((routeResult) => {
+                    if (routeResult && routeResult.polyline && routeResult.polyline.length >= 1) {
+                      // Convert polyline from [lon, lat] to [lat, lng]
+                      const latLngPolyline = routeResult.polyline.map((point) => [point[1], point[0]] as [number, number])
+                      stagedRef.current?.recalculateDrawSegment(latLngPolyline)
+                      setSnapLoading(false)
+                      isRecalculatingRef.current = false
+                    } else {
+                      console.error('[snap] Route failed: polyline too short or invalid')
+                      setSnapLoading(false)
+                      isRecalculatingRef.current = false
+                    }
+                  })
+                  .catch((err) => {
+                    console.error('[snap] Route error:', err)
+                    setSnapLoading(false)
+                    isRecalculatingRef.current = false
+                  })
+              } else {
+                setSnapLoading(false)
+              }
+            })
+            .catch((err) => {
+              console.error('[snap] Snap error:', err)
+              setSnapLoading(false)
+            })
         }
         return
       }
@@ -1384,6 +1452,13 @@ export default function LeafletMap({
         iconAnchor: [4, 4],
       })
 
+      const anchorPointIcon = L.divIcon({
+        className: '',
+        html: snapAnchorPointDivHtml(14, MAP),
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      })
+
       const sectionEraseActiveIcon = L.divIcon({
         className: '',
         html: drawTrailNodeDivHtml(8, MAP.destructive, MAP),
@@ -1391,11 +1466,31 @@ export default function LeafletMap({
         iconAnchor: [4, 4],
       })
 
+      // Precompute anchor point lookup set for fast O(1) checking
+      const anchorPointsSet = new Set<string>()
+      if (tool === 'snap') {
+        snapAnchorPointsRef.current.forEach((anchor) => {
+          // Use rounded coordinates as key (to 5 decimal places ~ 1m precision)
+          const key = `${Math.round(anchor[0] * 1e5)},${Math.round(anchor[1] * 1e5)}`
+          anchorPointsSet.add(key)
+        })
+      }
+
       drawPts.forEach((pt, i) => {
+        // In snap mode, only render markers for anchor points
+        const isAnchorPoint =
+          tool === 'snap' &&
+          anchorPointsSet.has(`${Math.round(pt[0] * 1e5)},${Math.round(pt[1] * 1e5)}`)
+
+        if (tool === 'snap' && !isAnchorPoint) {
+          // Skip rendering markers for non-anchor points in snap mode
+          return
+        }
+
         const marker = L.marker(pt as L.LatLngExpression, {
-          icon: nodeIcon,
+          icon: isAnchorPoint ? anchorPointIcon : nodeIcon,
           interactive: true,
-          draggable: tool === 'pencil',
+          draggable: tool === 'pencil' || tool === 'snap',
           zIndexOffset: 1000,
         })
         if (tool === 'eraser') {
@@ -1456,6 +1551,103 @@ export default function LeafletMap({
             popup.setLatLng(marker.getLatLng()).setContent(popupContent).openOn(mapInstance)
           })
         }
+        if (tool === 'snap') {
+          marker.on('dragend', async () => {
+            if (isRecalculatingRef.current) {
+              return
+            }
+
+            const { lat, lng } = marker.getLatLng()
+            const snapped = await snapToNearestWay(lat, lng, 50)
+            if (!snapped) return
+
+            const snappedLatLng: [number, number] = [snapped.point[1], snapped.point[0]]
+
+            // Find the closest anchor point to the dragged position
+            const anchors = snapAnchorPointsRef.current
+            let matchingAnchorIndex = -1
+            let closestDistance = Infinity
+
+            if (anchors.length > 0) {
+              for (let j = 0; j < anchors.length; j++) {
+                const [aLat, aLng] = anchors[j]
+                const latDiff = Math.abs(aLat - lat)
+                const lngDiff = Math.abs(aLng - lng)
+                const distance = Math.sqrt(latDiff * latDiff + lngDiff * lngDiff)
+
+                // Find closest anchor (within ~300m, which is 0.003 degrees at equator)
+                if (distance < closestDistance && distance < 0.003) {
+                  closestDistance = distance
+                  matchingAnchorIndex = j
+                }
+              }
+            }
+
+            if (matchingAnchorIndex >= 0) {
+              // This is an anchor point - recalculate only affected segments
+              // Update the anchor point
+              const updatedAnchors = [...anchors]
+              updatedAnchors[matchingAnchorIndex] = snappedLatLng
+
+              isRecalculatingRef.current = true
+              setSnapAnchorPoints(updatedAnchors)
+
+              // Build new polyline by recalculating only affected segments
+              // Segment before: (anchor[i-1] → updated anchor[i])
+              // Segment after: (updated anchor[i] → anchor[i+1])
+              const newPolyline: [number, number][] = []
+
+              for (let segIdx = 0; segIdx < updatedAnchors.length - 1; segIdx++) {
+                const fromAnchor = updatedAnchors[segIdx]
+                const toAnchor = updatedAnchors[segIdx + 1]
+
+                // Route this segment
+                const routeResult = await routeBetweenPoints(
+                  fromAnchor[0],
+                  fromAnchor[1],
+                  toAnchor[0],
+                  toAnchor[1]
+                )
+
+                if (routeResult && routeResult.polyline && routeResult.polyline.length >= 1) {
+                  // Convert from [lon, lat] to [lat, lng]
+                  const latLngSegment = routeResult.polyline.map((point) => [point[1], point[0]] as [number, number])
+
+                  if (segIdx === 0) {
+                    // First segment - include all points
+                    newPolyline.push(...latLngSegment)
+                  } else {
+                    // Subsequent segments - skip first point to avoid duplication at anchor
+                    // But keep the last point which is the endpoint
+                    newPolyline.push(...latLngSegment.slice(1))
+                  }
+                } else {
+                  console.error('[snap-drag] Route segment', segIdx, 'failed')
+                  isRecalculatingRef.current = false
+                  return
+                }
+              }
+
+              // Ensure the final anchor point is included (may differ slightly from route endpoint due to snapping)
+              const finalAnchor = updatedAnchors[updatedAnchors.length - 1]
+              if (newPolyline.length > 0) {
+                const lastPoint = newPolyline[newPolyline.length - 1]
+                const latDiff = Math.abs(lastPoint[0] - finalAnchor[0])
+                const lngDiff = Math.abs(lastPoint[1] - finalAnchor[1])
+                if (latDiff > 0.00001 || lngDiff > 0.00001) {
+                  // Last point differs from final anchor - replace it to ensure accuracy
+                  newPolyline[newPolyline.length - 1] = finalAnchor
+                }
+              }
+
+              stagedRef.current?.recalculateDrawSegment(newPolyline)
+              isRecalculatingRef.current = false
+            } else {
+              // Not an anchor point - just move it in place
+              staged.moveDrawPoint(i, snappedLatLng)
+            }
+          })
+        }
         if (tool === 'section-eraser') {
           marker.on('click', (e: L.LeafletMouseEvent) => {
             L.DomEvent.stopPropagation(e)
@@ -1471,6 +1663,88 @@ export default function LeafletMap({
         }
         marker.addTo(drawTrailLayerRef.current!)
       })
+
+      // Render draggable midpoints between anchor points in snap mode
+      if (tool === 'snap' && snapAnchorPointsRef.current.length >= 2) {
+        const midpointIcon = L.divIcon({
+          className: '',
+          html: snapMidpointDivHtml(10, MAP),
+          iconSize: [10, 10],
+          iconAnchor: [5, 5],
+        })
+
+        const anchors = snapAnchorPointsRef.current
+        // Find indices of each anchor point in the polyline
+        const anchorIndicesInPolyline: number[] = []
+        for (const anchor of anchors) {
+          for (let j = 0; j < drawPts.length; j++) {
+            const [lat, lng] = drawPts[j]
+            const [aLat, aLng] = anchor
+            if (Math.abs(lat - aLat) < 0.00001 && Math.abs(lng - aLng) < 0.00001) {
+              anchorIndicesInPolyline.push(j)
+              break
+            }
+          }
+        }
+
+        // Create midpoint markers on the polyline between consecutive anchors
+        for (let i = 0; i < anchorIndicesInPolyline.length - 1; i++) {
+          const startIdx = anchorIndicesInPolyline[i]
+          const endIdx = anchorIndicesInPolyline[i + 1]
+
+          if (startIdx >= 0 && endIdx > startIdx) {
+            const segmentLength = endIdx - startIdx
+            const midIdx = Math.floor(startIdx + segmentLength / 2)
+            const mid = drawPts[midIdx]
+
+            const marker = L.marker(mid as L.LatLngExpression, {
+              icon: midpointIcon,
+              interactive: true,
+              draggable: true,
+              zIndexOffset: 1200,
+            })
+
+            marker.on('dragend', async () => {
+              if (isRecalculatingRef.current) {
+                console.log('[snap-midpoint-drag] Already recalculating, skipping')
+                return
+              }
+
+              const { lat, lng } = marker.getLatLng()
+              const snapped = await snapToNearestWay(lat, lng, 50)
+              if (!snapped) {
+                console.log('[snap-midpoint-drag] Snap failed, reverting')
+                return
+              }
+
+              const snappedLatLng: [number, number] = [snapped.point[1], snapped.point[0]]
+              console.log('[snap-midpoint-drag] Snapped midpoint between anchor', i, 'and', i + 1, 'to', snappedLatLng)
+
+              // Insert the new anchor point between anchors[i] and anchors[i+1]
+              const updatedAnchors = [...anchors]
+              updatedAnchors.splice(i + 1, 0, snappedLatLng)
+
+              isRecalculatingRef.current = true
+              setSnapAnchorPoints(updatedAnchors)
+
+              // Recalculate route through all anchors
+              const routeResult = await routeThroughPoints(updatedAnchors)
+              if (routeResult && routeResult.polyline && routeResult.polyline.length >= 1) {
+                console.log('[snap-midpoint-drag] Route recalculated with', updatedAnchors.length, 'anchors')
+                const latLngPolyline = routeResult.polyline.map((point) => [point[1], point[0]] as [number, number])
+                stagedRef.current?.recalculateDrawSegment(latLngPolyline)
+              } else {
+                console.error('[snap-midpoint-drag] Route recalculation failed')
+                // Revert the anchor update
+                setSnapAnchorPoints(anchors)
+              }
+              isRecalculatingRef.current = false
+            })
+
+            marker.addTo(drawTrailLayerRef.current!)
+          }
+        }
+      }
 
       const insertMidMarkers: L.Marker[] = []
       if (tool === 'pencil' && drawPts.length >= 2) {
@@ -1968,6 +2242,27 @@ export default function LeafletMap({
       })
     }
   }, [stravaToolActive, stravaSegments, staged?.segments]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clean up snap tool state when exiting draw mode or switching tools
+  useEffect(() => {
+    if (!drawToolActive || staged?.drawTool !== 'snap') {
+      setSnapFirstPoint(null)
+      setSnapLoading(false)
+      setSnapAnchorPoints([])
+      setSnapAnchorIndices([])
+      isRecalculatingRef.current = false
+    }
+  }, [drawToolActive, staged?.drawTool])
+
+  // Clear snap state when trail is cleared
+  useEffect(() => {
+    if (drawToolActive && staged?.segments.length === 0) {
+      setSnapFirstPoint(null)
+      setSnapAnchorPoints([])
+      setSnapAnchorIndices([])
+      isRecalculatingRef.current = false
+    }
+  }, [drawToolActive, staged?.segments.length])
 
   return (
     <div className="relative w-full h-full">

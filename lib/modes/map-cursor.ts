@@ -21,6 +21,7 @@ export function resolveMapCursor(params: {
     if (addTrailTool === 'draw') {
       if (drawTool === 'pencil') return 'crosshair'
       if (drawTool === 'section-eraser') return 'crosshair'
+      if (drawTool === 'snap') return 'pointer'
       return 'pointer'
     }
     if (addTrailTool === 'gpx') return 'crosshair'
