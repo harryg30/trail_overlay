@@ -52,41 +52,24 @@ async function injectEnvDefaults(targetDir) {
   const mapillaryToken = String(process.env.NEXT_PUBLIC_MAPILLARY_ACCESS_TOKEN || '').trim()
   if (!mapillaryToken) return
 
-  const popupPath = path.join(targetDir, 'popup.js')
   const bridgePath = path.join(targetDir, 'content-bridge.js')
 
-  const patchPopup = async () => {
-    try {
-      const text = await fs.readFile(popupPath, 'utf8')
-      const needle = "mapillaryClientToken: ''"
-      if (!text.includes(needle)) return
-      const safe = mapillaryToken.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
-      await fs.writeFile(popupPath, text.replace(needle, `mapillaryClientToken: '${safe}'`), 'utf8')
-    } catch {
-      /* ignore */
-    }
+  try {
+    const text = await fs.readFile(bridgePath, 'utf8')
+    const needle = 'let MAPILLARY_CLIENT_TOKEN = "";'
+    if (!text.includes(needle)) return
+    const safe = mapillaryToken.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    await fs.writeFile(
+      bridgePath,
+      text.replace(
+        needle,
+        `let MAPILLARY_CLIENT_TOKEN = "${safe}";`
+      ),
+      'utf8'
+    )
+  } catch {
+    /* ignore */
   }
-
-  const patchBridge = async () => {
-    try {
-      const text = await fs.readFile(bridgePath, 'utf8')
-      const needle = 'const items = await chrome.storage.sync.get({ mapillaryClientToken: "" });'
-      if (!text.includes(needle)) return
-      const safe = mapillaryToken.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-      await fs.writeFile(
-        bridgePath,
-        text.replace(
-          needle,
-          `const items = await chrome.storage.sync.get({ mapillaryClientToken: "${safe}" });`
-        ),
-        'utf8'
-      )
-    } catch {
-      /* ignore */
-    }
-  }
-
-  await Promise.all([patchPopup(), patchBridge()])
 }
 
 async function buildTarget(target) {

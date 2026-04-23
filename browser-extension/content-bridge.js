@@ -1,6 +1,7 @@
 // ISOLATED world: handles extension APIs + fetching
 
 const DEFAULT_API_URL = "https://trail-overlay.vercel.app";
+let MAPILLARY_CLIENT_TOKEN = "";
 
 /** Envelope so Strava/page postMessage traffic cannot collide with our protocol. */
 const TO_BRIDGE = "__trailOverlayToBridge";
@@ -520,12 +521,11 @@ window.addEventListener("message", async (event) => {
 
     const requestId = event.data.requestId;
     try {
-      const items = await chrome.storage.sync.get({ mapillaryClientToken: "" });
       window.postMessage(
         {
           type: "MAPILLARY_CLIENT_TOKEN_RESPONSE",
           requestId,
-          token: items.mapillaryClientToken || "",
+          token: MAPILLARY_CLIENT_TOKEN || "",
           [FROM_BRIDGE]: true
         },
         "*"

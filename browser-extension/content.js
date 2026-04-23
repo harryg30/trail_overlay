@@ -4202,7 +4202,7 @@ function createMapillaryPanel(lat, lng) {
       const noToken = String(mapillaryClientToken || "").trim().length === 0;
       showFallback(
         noToken
-          ? "Mapillary preview needs a client token in extension settings."
+          ? "Mapillary inline preview not configured."
           : "No nearby Mapillary photo found for this location."
       );
       return;
