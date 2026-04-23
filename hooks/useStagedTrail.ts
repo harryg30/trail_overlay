@@ -105,6 +105,16 @@ export function useStagedTrail() {
     setActiveEnd('end')
   }, [])
 
+  /** Recalculate the active draw segment polyline with a new route. Used by snap tool drag recalculation. */
+  const recalculateDrawSegment = useCallback((newPolyline: [number, number][]) => {
+    const end = activeEndRef.current
+    applyEdit((prev) => {
+      const target = findDrawTarget(prev, end)
+      if (!target || newPolyline.length < 1) return prev
+      return replaceAt(prev, target.idx, { ...target.seg, polyline: newPolyline })
+    })
+  }, [applyEdit])
+
   // --- Undo / Redo ---
 
   const undo = useCallback(() => {
@@ -371,7 +381,7 @@ export function useStagedTrail() {
     drawTool, setDrawTool,
     activeEnd, setActiveEnd,
 
-    addSegment, removeSegment, clearAll, resetAll, loadDrawSegment,
+    addSegment, removeSegment, clearAll, resetAll, loadDrawSegment, recalculateDrawSegment,
 
     undo, redo,
     canUndo: historyPast.length > 0,

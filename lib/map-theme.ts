@@ -189,3 +189,17 @@ export function drawNetworkNodeDivHtml(
 ): string {
   return `<div style="width:${size}px;height:${size}px;background:${borderColor};border:2px solid ${palette.foreground};border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.4)"></div>`
 }
+
+export function snapAnchorPointDivHtml(
+  size: number = 14,
+  palette: MapPalette = MAP
+): string {
+  return `<div style="width:${size}px;height:${size}px;background:${palette.electric};border:3px solid ${palette.foreground};border-radius:50%;box-shadow:0 0 0 3px ${palette.electric}40,0 2px 6px rgba(0,0,0,.5)"></div>`
+}
+
+export function snapMidpointDivHtml(
+  size: number = 10,
+  palette: MapPalette = MAP
+): string {
+  return `<div style="width:${size}px;height:${size}px;background:${palette.electric};border:2px dashed ${palette.foreground};border-radius:50%;opacity:0.6;box-shadow:0 1px 3px rgba(0,0,0,.3)"></div>`
+}

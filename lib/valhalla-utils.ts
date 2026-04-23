@@ -135,3 +135,56 @@ export async function routeBetweenPoints(
     return null
   }
 }
+
+/**
+ * Route through multiple waypoints using server-side Valhalla proxy.
+ * Points are in [lat, lng] format and will be converted to [lon, lat] for the API.
+ */
+export async function routeThroughPoints(
+  points: [number, number][],
+): Promise<RouteResult | null> {
+  if (points.length < 2) {
+    console.error('routeThroughPoints requires at least 2 points')
+    return null
+  }
+
+  try {
+    // Convert [lat, lng] to [lon, lat] for API
+    const coordinates = points.map(([lat, lng]) => [lng, lat] as [number, number])
+
+    const response = await fetch('/api/valhalla/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        coordinates,
+      }),
+    })
+
+    if (!response.ok) {
+      if (response.status === 429) throw new Error('Rate limited')
+      throw new Error(`Route failed: ${response.status}`)
+    }
+
+    const data = (await response.json()) as ValhallaRouteResponse
+    const route = data.routes?.[0]
+    if (!route?.geometry?.coordinates) {
+      return null
+    }
+
+    // Collect unique OSM way IDs from all steps
+    const osmWayIds = new Set<number>()
+    route.legs?.forEach((leg) => {
+      leg.steps?.forEach((step) => {
+        if (step.way_id) osmWayIds.add(step.way_id)
+      })
+    })
+
+    return {
+      polyline: route.geometry.coordinates as [number, number][],
+      osmWayIds: Array.from(osmWayIds),
+    }
+  } catch (error) {
+    console.error('Route through points error:', error)
+    return null
+  }
+}

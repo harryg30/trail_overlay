@@ -51,7 +51,26 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { startLat, startLng, endLat, endLng } = await req.json()
+    const body = await req.json()
+    const { startLat, startLng, endLat, endLng, coordinates } = body
+    console.log('[valhalla-route] Request body:', { startLat, startLng, endLat, endLng, coordCount: Array.isArray(coordinates) ? coordinates.length : 'N/A' })
+
+    // Support both legacy two-point and new multi-point formats
+    let coordArray: [number, number][]
+    if (coordinates && Array.isArray(coordinates)) {
+      // New format: coordinates = [[lon, lat], [lon, lat], ...]
+      coordArray = coordinates
+      console.log('[valhalla-route] Using multi-point format with', coordArray.length, 'points')
+    } else if (startLat !== undefined && startLng !== undefined && endLat !== undefined && endLng !== undefined) {
+      // Legacy format: individual lat/lng params
+      coordArray = [
+        [startLng, startLat],
+        [endLng, endLat],
+      ]
+      console.log('[valhalla-route] Using legacy two-point format')
+    } else {
+      return NextResponse.json({ error: 'Missing coordinates or startLat/Lng/endLat/endLng parameters' }, { status: 400 })
+    }
 
     const response = await fetch(`${ORS_BASE}/v2/directions/cycling-regular`, {
       method: 'POST',
@@ -60,20 +79,20 @@ export async function POST(req: NextRequest) {
         'Authorization': ORS_API_KEY,
       },
       body: JSON.stringify({
-        coordinates: [
-          [startLng, startLat],
-          [endLng, endLat],
-        ],
+        coordinates: coordArray,
         geometry: true,
         instructions: false,
       }),
     })
+
+    console.log('[valhalla-route] ORS request sent with', coordArray.length, 'coordinates')
 
     if (!response.ok) {
       if (response.status === 429) {
         return NextResponse.json({ error: 'Rate limited' }, { status: 429 })
       }
       const errorText = await response.text()
+      console.error('[valhalla-route] ORS error response:', response.status, errorText)
       return NextResponse.json(
         { error: `Route failed: ${response.status}`, details: errorText },
         { status: response.status }
@@ -88,12 +107,12 @@ export async function POST(req: NextRequest) {
     }
 
     const route = data.routes[0]
-    const coordinates = decodePolyline(route.geometry)
+    const decodedPolyline = decodePolyline(route.geometry)
 
     const transformed = {
       routes: [{
         geometry: {
-          coordinates,
+          coordinates: decodedPolyline,
         },
         legs: [{
           steps: [{
