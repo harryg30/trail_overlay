@@ -475,4 +475,72 @@ window.addEventListener("message", async (event) => {
     }
     return;
   }
+
+  if (event.data?.type === "GET_RIGHT_CLICK_VIEWER") {
+    if (
+      event.source !== window ||
+      event.data?.requestSource !== "trail-overlay-content"
+    ) {
+      return;
+    }
+
+    const requestId = event.data.requestId;
+    try {
+      const items = await chrome.storage.sync.get({ rightClickViewer: "mapillary" });
+      window.postMessage(
+        {
+          type: "RIGHT_CLICK_VIEWER_RESPONSE",
+          requestId,
+          viewer: items.rightClickViewer || "mapillary",
+          [FROM_BRIDGE]: true
+        },
+        "*"
+      );
+    } catch {
+      window.postMessage(
+        {
+          type: "RIGHT_CLICK_VIEWER_RESPONSE",
+          requestId,
+          viewer: "mapillary",
+          [FROM_BRIDGE]: true
+        },
+        "*"
+      );
+    }
+    return;
+  }
+
+  if (event.data?.type === "GET_MAPILLARY_CLIENT_TOKEN") {
+    if (
+      event.source !== window ||
+      event.data?.requestSource !== "trail-overlay-content"
+    ) {
+      return;
+    }
+
+    const requestId = event.data.requestId;
+    try {
+      const items = await chrome.storage.sync.get({ mapillaryClientToken: "" });
+      window.postMessage(
+        {
+          type: "MAPILLARY_CLIENT_TOKEN_RESPONSE",
+          requestId,
+          token: items.mapillaryClientToken || "",
+          [FROM_BRIDGE]: true
+        },
+        "*"
+      );
+    } catch {
+      window.postMessage(
+        {
+          type: "MAPILLARY_CLIENT_TOKEN_RESPONSE",
+          requestId,
+          token: "",
+          [FROM_BRIDGE]: true
+        },
+        "*"
+      );
+    }
+    return;
+  }
 });

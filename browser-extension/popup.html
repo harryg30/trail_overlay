@@ -95,6 +95,29 @@
   <div id="status"></div>
 
   <div class="row-toggle">
+    <h4 class="asset-heading">Right-click viewer</h4>
+    <label for="rightClickViewer">Default viewer</label>
+    <select id="rightClickViewer" aria-label="Right-click map viewer">
+      <option value="mapillary">Mapillary 🗺️</option>
+      <option value="streetview">Google Street View 📸</option>
+    </select>
+    <p class="toggle-hint">
+      Right-click on the map to open your selected viewer. Mapillary inline preview needs a Mapillary client token; Street View needs a Google Maps API key.
+    </p>
+  </div>
+
+  <div class="row-toggle">
+    <h4 class="asset-heading">Mapillary Preview</h4>
+    <label for="mapillaryClientToken">Client token</label>
+    <input id="mapillaryClientToken" type="password" placeholder="MLY|...">
+    <p class="toggle-hint">
+      Used to find the nearest image for the in-panel preview iframe. Link-out still works without this.
+      <br>
+      <a href="https://www.mapillary.com/dashboard/developers" target="_blank" rel="noopener noreferrer" style="color: #fc4c02; text-decoration: none;">Get token from Mapillary developer dashboard</a>
+    </p>
+  </div>
+
+  <div class="row-toggle">
     <h4 class="asset-heading">Google Maps Street View</h4>
     <label for="googleMapsApiKey">API Key</label>
     <div style="display: flex; gap: 8px;">
@@ -105,7 +128,7 @@
     <p class="toggle-hint">
       <strong>Get your free API key:</strong><br>
       <a id="guideLink" href="https://developers.google.com/maps/documentation/streetview/request-streetview" target="_blank" rel="noopener noreferrer" style="color: #fc4c02; text-decoration: none;">📖 Google Maps API Guide</a><br>
-      <span style="font-size: 11px; color: #999; margin-top: 4px; display: block;">Right-click roads on the map to view Street View</span>
+      <span style="font-size: 11px; color: #999; margin-top: 4px; display: block;">Required only if using Street View as right-click viewer</span>
     </p>
   </div>
 
