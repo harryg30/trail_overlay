@@ -1,6 +1,6 @@
 import type { EditMode, TrimPoint, Trail, Network } from '@/lib/types'
 
-export type TrailEditTool = 'pencil' | 'eraser' | 'section-eraser'
+export type TrailEditTool = 'pencil' | 'eraser' | 'section-eraser' | 'snap'
 
 /**
  * All state that is scoped to an active edit mode.

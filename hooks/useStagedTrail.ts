@@ -105,6 +105,16 @@ export function useStagedTrail() {
     setActiveEnd('end')
   }, [])
 
+  /** Recalculate the active draw segment polyline with a new route. Used by snap tool drag recalculation. */
+  const recalculateDrawSegment = useCallback((newPolyline: [number, number][]) => {
+    const end = activeEndRef.current
+    applyEdit((prev) => {
+      const target = findDrawTarget(prev, end)
+      if (!target || newPolyline.length < 1) return prev
+      return replaceAt(prev, target.idx, { ...target.seg, polyline: newPolyline })
+    })
+  }, [applyEdit])
+
   // --- Undo / Redo ---
 
   const undo = useCallback(() => {
@@ -175,6 +185,23 @@ export function useStagedTrail() {
         return replaceAt(prev, target.idx, { ...target.seg, polyline: newPoly })
       }
       const newSeg = { id: genId(), source: 'draw' as const, polyline: [latlng] }
+      return end === 'end' ? [...prev, newSeg] : [newSeg, ...prev]
+    })
+  }, [applyEdit])
+
+  /** Append multiple points at once (more efficient than calling appendDrawPoint multiple times) */
+  const appendDrawPoints = useCallback((points: [number, number][]) => {
+    const end = activeEndRef.current
+    applyEdit((prev) => {
+      const target = findDrawTarget(prev, end)
+      if (target) {
+        const newPoly = end === 'end'
+          ? [...target.seg.polyline, ...points]
+          : [...points, ...target.seg.polyline]
+        return replaceAt(prev, target.idx, { ...target.seg, polyline: newPoly })
+      }
+      if (points.length === 0) return prev
+      const newSeg = { id: genId(), source: 'draw' as const, polyline: points }
       return end === 'end' ? [...prev, newSeg] : [newSeg, ...prev]
     })
   }, [applyEdit])
@@ -354,13 +381,14 @@ export function useStagedTrail() {
     drawTool, setDrawTool,
     activeEnd, setActiveEnd,
 
-    addSegment, removeSegment, clearAll, resetAll, loadDrawSegment,
+    addSegment, removeSegment, clearAll, resetAll, loadDrawSegment, recalculateDrawSegment,
 
     undo, redo,
     canUndo: historyPast.length > 0,
     canRedo: historyFuture.length > 0,
 
     appendDrawPoint,
+    appendDrawPoints,
     removeDrawPoint,
     moveDrawPoint,
     insertDrawPointAfter,
