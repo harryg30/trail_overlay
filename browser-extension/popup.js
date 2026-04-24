@@ -46,6 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const googleMapsApiKey = document.getElementById('googleMapsApiKey')
   const validateKeyBtn = document.getElementById('validateKey')
   const keyStatus = document.getElementById('keyStatus')
+  const rightClickViewer = document.getElementById('rightClickViewer')
 
   const storageDefaults = {
     apiUrl: DEFAULT_API_URL,
@@ -53,7 +54,8 @@ document.addEventListener('DOMContentLoaded', () => {
     overlayNetworksVisible: true,
     overlayTrailPhotosVisible: true,
     overlayBookmarkHighlightColor: 'yellow',
-    googleMapsApiKey: ''
+    googleMapsApiKey: '',
+    rightClickViewer: 'mapillary'
   }
 
   let hexSaveTimer = null
@@ -155,6 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
     showNetworks.checked = items.overlayNetworksVisible !== false
     showTrailPhotos.checked = items.overlayTrailPhotosVisible !== false
     googleMapsApiKey.value = items.googleMapsApiKey || ''
+    rightClickViewer.value = items.rightClickViewer || 'mapillary'
 
     const { preset, hex } = classifyHighlight(items.overlayBookmarkHighlightColor)
     bookmarkHaloPreset.value = preset
@@ -261,5 +264,12 @@ document.addEventListener('DOMContentLoaded', () => {
       bookmarkHaloHex.value = hex
       saveBookmarkHighlight(hex, 'Bookmark outline color saved.')
     }
+  })
+
+  rightClickViewer.addEventListener('change', () => {
+    chrome.storage.sync.set({ rightClickViewer: rightClickViewer.value }, () => {
+      status.textContent = `Right-click viewer: ${rightClickViewer.options[rightClickViewer.selectedIndex].text}.`
+      setTimeout(() => { status.textContent = '' }, 2000)
+    })
   })
 })

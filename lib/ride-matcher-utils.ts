@@ -2,6 +2,18 @@ import { Ride } from './types'
 
 const ROUNDS_PER_GAME = 5
 
+/**
+ * Fisher-Yates shuffle for unbiased random shuffling
+ */
+function shuffleArray<T>(array: T[]): T[] {
+  const result = [...array]
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]]
+  }
+  return result
+}
+
 export interface GameRound {
   rideId: string
   lat: number
@@ -35,8 +47,13 @@ export function createGameSession(
     throw new Error(`Need at least ${roundsPerGame} rides. You have ${rides.length}.`)
   }
 
-  // Shuffle and take N rides
-  const shuffled = [...rides].sort(() => Math.random() - 0.5)
+  // Validate roundsPerGame doesn't exceed available rides
+  if (roundsPerGame > rides.length) {
+    throw new Error(`Requested ${roundsPerGame} rounds but only ${rides.length} rides available`)
+  }
+
+  // Shuffle and take N rides using Fisher-Yates
+  const shuffled = shuffleArray(rides)
   const selectedRides = shuffled.slice(0, roundsPerGame)
 
   // Pick a random point from each ride
@@ -58,8 +75,8 @@ export function createGameSession(
     }
   })
 
-  // Shuffle question order for variety
-  rounds.sort(() => Math.random() - 0.5)
+  // Shuffle question order for variety using Fisher-Yates
+  const shuffledRounds = shuffleArray(rounds)
 
   // Build ride titles (add date if duplicates)
   const ridesByName = new Map<string, Ride[]>()
@@ -73,8 +90,9 @@ export function createGameSession(
   const rideTitles: Record<string, string> = {}
   for (const ride of selectedRides) {
     const ridesWithSameName = ridesByName.get(ride.name)!
+    // Only add date if there are duplicates AND timestamp is non-null and not 1970
     if (ridesWithSameName.length > 1 && ride.timestamp) {
-      const dateStr = new Date(ride.timestamp).toLocaleDateString()
+      const dateStr = ride.timestamp.toLocaleDateString()
       rideTitles[ride.id] = `${ride.name} (${dateStr})`
     } else {
       rideTitles[ride.id] = ride.name
@@ -83,7 +101,7 @@ export function createGameSession(
 
   return {
     sessionId: `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-    rounds,
+    rounds: shuffledRounds,
     rideIds: selectedRides.map((r) => r.id),
     rideTitles,
   }

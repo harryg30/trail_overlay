@@ -1,6 +1,7 @@
 // ISOLATED world: handles extension APIs + fetching
 
 const DEFAULT_API_URL = "https://trail-overlay.vercel.app";
+let MAPILLARY_CLIENT_TOKEN = "";
 
 /** Envelope so Strava/page postMessage traffic cannot collide with our protocol. */
 const TO_BRIDGE = "__trailOverlayToBridge";
@@ -468,6 +469,73 @@ window.addEventListener("message", async (event) => {
           type: "GOOGLE_MAPS_API_KEY_RESPONSE",
           requestId,
           apiKey: "",
+          [FROM_BRIDGE]: true
+        },
+        "*"
+      );
+    }
+    return;
+  }
+
+  if (event.data?.type === "GET_RIGHT_CLICK_VIEWER") {
+    if (
+      event.source !== window ||
+      event.data?.requestSource !== "trail-overlay-content"
+    ) {
+      return;
+    }
+
+    const requestId = event.data.requestId;
+    try {
+      const items = await chrome.storage.sync.get({ rightClickViewer: "mapillary" });
+      window.postMessage(
+        {
+          type: "RIGHT_CLICK_VIEWER_RESPONSE",
+          requestId,
+          viewer: items.rightClickViewer || "mapillary",
+          [FROM_BRIDGE]: true
+        },
+        "*"
+      );
+    } catch {
+      window.postMessage(
+        {
+          type: "RIGHT_CLICK_VIEWER_RESPONSE",
+          requestId,
+          viewer: "mapillary",
+          [FROM_BRIDGE]: true
+        },
+        "*"
+      );
+    }
+    return;
+  }
+
+  if (event.data?.type === "GET_MAPILLARY_CLIENT_TOKEN") {
+    if (
+      event.source !== window ||
+      event.data?.requestSource !== "trail-overlay-content"
+    ) {
+      return;
+    }
+
+    const requestId = event.data.requestId;
+    try {
+      window.postMessage(
+        {
+          type: "MAPILLARY_CLIENT_TOKEN_RESPONSE",
+          requestId,
+          token: MAPILLARY_CLIENT_TOKEN || "",
+          [FROM_BRIDGE]: true
+        },
+        "*"
+      );
+    } catch {
+      window.postMessage(
+        {
+          type: "MAPILLARY_CLIENT_TOKEN_RESPONSE",
+          requestId,
+          token: "",
           [FROM_BRIDGE]: true
         },
         "*"

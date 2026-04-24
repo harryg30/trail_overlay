@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { loadEnvLocal } from './load-env-local.mjs'
 
 const ROOT = process.cwd()
 const SOURCE_DIR = path.join(ROOT, 'browser-extension')
@@ -47,6 +48,40 @@ async function copyDirRecursive(srcDir, dstDir) {
   }
 }
 
+async function injectEnvDefaults(targetDir) {
+  // Only inject Mapillary token in development/local builds
+  const buildEnv = process.env.BUILD_ENV || process.env.NODE_ENV || 'production'
+  const isDevBuild = buildEnv === 'development' || buildEnv === 'dev'
+
+  if (!isDevBuild) {
+    // Skip token injection for production builds to avoid shipping credentials
+    return
+  }
+
+  const mapillaryToken = String(process.env.NEXT_PUBLIC_MAPILLARY_ACCESS_TOKEN || '').trim()
+  if (!mapillaryToken) return
+
+  const bridgePath = path.join(targetDir, 'content-bridge.js')
+
+  try {
+    const text = await fs.readFile(bridgePath, 'utf8')
+    const needle = 'let MAPILLARY_CLIENT_TOKEN = "";'
+    if (!text.includes(needle)) return
+    const safe = mapillaryToken.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    await fs.writeFile(
+      bridgePath,
+      text.replace(
+        needle,
+        `let MAPILLARY_CLIENT_TOKEN = "${safe}";`
+      ),
+      'utf8'
+    )
+    console.log('[build-extension-targets] Injected MAPILLARY_ACCESS_TOKEN (dev build)')
+  } catch {
+    /* ignore */
+  }
+}
+
 async function buildTarget(target) {
   const manifestTemplate = TARGETS[target]
   if (!manifestTemplate) {
@@ -63,12 +98,14 @@ async function buildTarget(target) {
 
   await fs.rm(targetDir, { recursive: true, force: true })
   await copyDirRecursive(SOURCE_DIR, targetDir)
+  await injectEnvDefaults(targetDir)
   await fs.copyFile(manifestTemplatePath, manifestOutPath)
 
   console.log(`Built ${target}: ${path.relative(ROOT, targetDir)}`)
 }
 
 async function main() {
+  loadEnvLocal()
   const arg = process.argv[2] || 'all'
 
   if (!(await pathExists(SOURCE_DIR))) {

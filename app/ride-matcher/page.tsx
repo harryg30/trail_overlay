@@ -46,11 +46,11 @@ export default function RideMatcherPage() {
     import('leaflet').then((L) => {
       if (mapRef.current) return // Already initialized
 
-      mapRef.current = L.map(mapContainerRef.current!).setView([40, -105], 10)
+      const map = L.map(mapContainerRef.current!).setView([40, -105], 10)
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors',
         maxZoom: 19,
-      }).addTo(mapRef.current)
+      }).addTo(map)
 
       // Add game rides
       const gameRideIds = session.rideIds
@@ -65,10 +65,20 @@ export default function RideMatcherPage() {
             color,
             weight: 2,
             opacity: 0.6,
-          }).addTo(mapRef.current!)
+          }).addTo(map)
         }
       })
+
+      mapRef.current = map
     })
+
+    return () => {
+      // Cleanup on unmount or dependency change
+      if (mapRef.current) {
+        mapRef.current.remove()
+        mapRef.current = null
+      }
+    }
   }, [rides, session])
 
   // Fetch session on mount
@@ -197,27 +207,29 @@ export default function RideMatcherPage() {
 
   // Handle Street View image load failure - try another point on the ride
   const handleStreetViewError = () => {
-    if (!session || !currentPoint || streetViewAttempts >= 4) {
-      console.error('Street View unavailable after retries')
-      return
-    }
+    setStreetViewAttempts((attempts) => {
+      if (!session || !currentPoint || attempts >= 4) {
+        console.error('Street View unavailable after retries')
+        return attempts
+      }
 
-    // Get current ride and pick a different random point
-    const currentRound = session.rounds[gameState!.round]
-    const rideId = currentRound.rideId
-    const ride = rides.find((r) => r.id === rideId)
+      // Get current ride and pick a different random point
+      const currentRound = session.rounds[gameState!.round]
+      const rideId = currentRound.rideId
+      const ride = rides.find((r) => r.id === rideId)
 
-    if (!ride || !ride.polyline || ride.polyline.length === 0) {
-      console.error('Ride not found or has no polyline')
-      return
-    }
+      if (!ride || !ride.polyline || ride.polyline.length === 0) {
+        console.error('Ride not found or has no polyline')
+        return attempts
+      }
 
-    // Pick a random point from the ride
-    const randomIdx = Math.floor(Math.random() * ride.polyline.length)
-    const newPoint = ride.polyline[randomIdx]
+      // Pick a random point from the ride
+      const randomIdx = Math.floor(Math.random() * ride.polyline.length)
+      const newPoint = ride.polyline[randomIdx]
 
-    setCurrentPoint({ lat: newPoint[0], lng: newPoint[1] })
-    setStreetViewAttempts((n) => n + 1)
+      setCurrentPoint({ lat: newPoint[0], lng: newPoint[1] })
+      return attempts + 1
+    })
   }
 
   const handleGuess = async (guessRideId: string) => {
@@ -230,8 +242,6 @@ export default function RideMatcherPage() {
           sessionId: gameState.sessionId,
           guessRideId,
           round: gameState.round,
-          guessCount: gameState.guessCount,
-          totalScore: gameState.totalScore,
         }),
       })
 

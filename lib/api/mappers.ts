@@ -77,7 +77,7 @@ export function rowToRide(row: RideRow): Ride {
     elevation: row.elevation,
     polyline: row.polyline,
     pointCount: row.point_count,
-    timestamp: row.timestamp ? new Date(row.timestamp) : new Date(0),
+    timestamp: row.timestamp ? new Date(row.timestamp) : null,
     stravaActivityId: row.strava_activity_id ?? undefined,
   }
 }

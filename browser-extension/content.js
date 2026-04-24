@@ -3479,6 +3479,7 @@ function applyOverlayPrefsFromMessage(prefs) {
 
 const STREET_VIEW_PANEL_ID = "trail-overlay-street-view-panel";
 let googleMapsApiKey = "";
+let mapillaryClientToken = "";
 
 async function fetchGoogleMapsApiKeyFromBridge() {
   return fetchFromBridgeWithTimeout(
@@ -3486,6 +3487,58 @@ async function fetchGoogleMapsApiKeyFromBridge() {
     "GOOGLE_MAPS_API_KEY_RESPONSE",
     "",
     (data) => data.apiKey || "",
+    { requestSource: "trail-overlay-content" },
+    5000
+  );
+}
+
+async function fetchRightClickViewerFromBridge() {
+  return fetchFromBridgeWithTimeout(
+    "GET_RIGHT_CLICK_VIEWER",
+    "RIGHT_CLICK_VIEWER_RESPONSE",
+    "mapillary",
+    (data) => data.viewer || "mapillary",
+    { requestSource: "trail-overlay-content" },
+    5000
+  );
+}
+
+// Cache viewer preference and tokens to avoid async latency on every right-click
+let cachedRightClickViewer = null;
+let cachedMapillaryToken = null;
+
+async function getCachedRightClickViewer() {
+  if (cachedRightClickViewer === null) {
+    cachedRightClickViewer = await fetchRightClickViewerFromBridge();
+    // Listen for changes to viewer preference
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'RIGHT_CLICK_VIEWER_UPDATED') {
+        cachedRightClickViewer = event.data.viewer || 'mapillary';
+      }
+    });
+  }
+  return cachedRightClickViewer;
+}
+
+async function getCachedMapillaryToken() {
+  if (cachedMapillaryToken === null) {
+    cachedMapillaryToken = await fetchMapillaryClientTokenFromBridge();
+    // Listen for changes to token
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'MAPILLARY_TOKEN_UPDATED') {
+        cachedMapillaryToken = event.data.token || '';
+      }
+    });
+  }
+  return cachedMapillaryToken;
+}
+
+async function fetchMapillaryClientTokenFromBridge() {
+  return fetchFromBridgeWithTimeout(
+    "GET_MAPILLARY_CLIENT_TOKEN",
+    "MAPILLARY_CLIENT_TOKEN_RESPONSE",
+    "",
+    (data) => data.token || "",
     { requestSource: "trail-overlay-content" },
     5000
   );
@@ -3931,20 +3984,375 @@ async function loadStreetViewPanorama(container, lat, lng, panel) {
   }
 }
 
+// --- MAPILLARY ---
+
+const MAPILLARY_PANEL_ID = "trail-overlay-mapillary-panel";
+
+function buildMapillaryAppUrl(lat, lng) {
+  const url = new URL("https://www.mapillary.com/app/");
+  url.searchParams.set("lat", String(lat));
+  url.searchParams.set("lng", String(lng));
+  url.searchParams.set("z", "18");
+  url.searchParams.set("focus", "photo");
+  return url.toString();
+}
+
+function buildMapillaryEmbedUrl(imageKey) {
+  const embedUrl = new URL("https://www.mapillary.com/embed");
+  embedUrl.searchParams.set("image_key", String(imageKey));
+  embedUrl.searchParams.set("style", "photo");
+  return embedUrl.toString();
+}
+
+async function fetchNearestMapillaryImageKey(lat, lng) {
+  const token = String(cachedMapillaryToken || "").trim();
+  if (!token) return null;
+
+  const apiUrl = new URL("https://graph.mapillary.com/images");
+  apiUrl.searchParams.set("access_token", token);
+  apiUrl.searchParams.set("fields", "id,captured_at");
+  // Mapillary API uses 'll' parameter (lat,lng format) for location
+  apiUrl.searchParams.set("ll", `${lat},${lng}`);
+  apiUrl.searchParams.set("radius", "25");
+  apiUrl.searchParams.set("limit", "1");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+
+  try {
+    const response = await fetch(apiUrl.toString(), {
+      signal: controller.signal,
+      mode: "cors",
+      credentials: "omit"
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return payload?.data?.[0]?.id ? String(payload.data[0].id) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function closeMapillaryPanel() {
+  const panel = document.getElementById(MAPILLARY_PANEL_ID);
+  if (panel && panel.__cleanup) {
+    panel.__cleanup();
+  }
+  if (panel) panel.remove();
+}
+
+function createMapillaryPanel(lat, lng) {
+  closeMapillaryPanel();
+
+  const container = document.querySelector(".mapboxgl-map, .maplibregl-map");
+  if (!container) return;
+
+  const panel = document.createElement("div");
+  panel.id = MAPILLARY_PANEL_ID;
+  panel.__isExpanded = false;
+
+  const applySize = () => {
+    const isExpanded = panel.__isExpanded;
+    Object.assign(panel.style, {
+      position: "absolute",
+      bottom: "20px",
+      left: "20px",
+      width: isExpanded ? "700px" : "400px",
+      height: isExpanded ? "500px" : "300px",
+      borderRadius: "12px",
+      border: "1px solid rgba(255,255,255,0.2)",
+      background: "rgba(18,18,20,0.95)",
+      boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
+      backdropFilter: "blur(8px)",
+      zIndex: "10000",
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+      fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, sans-serif',
+      transition: "width 0.2s ease, height 0.2s ease"
+    });
+  };
+  applySize();
+
+  const header = document.createElement("div");
+  Object.assign(header.style, {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "12px 14px",
+    borderBottom: "1px solid rgba(255,255,255,0.1)",
+    flex: "0 0 auto",
+    background: "rgba(0,0,0,0.2)",
+    zIndex: "10001"
+  });
+
+  const title = document.createElement("span");
+  title.textContent = "Mapillary";
+  Object.assign(title.style, {
+    fontSize: "13px",
+    fontWeight: "600",
+    color: "rgba(244,244,245,0.9)"
+  });
+
+  const expandBtn = document.createElement("button");
+  expandBtn.type = "button";
+  expandBtn.textContent = "⛶";
+  Object.assign(expandBtn.style, {
+    width: "28px",
+    height: "28px",
+    padding: "0",
+    border: "none",
+    background: "none",
+    color: "rgba(244,244,245,0.6)",
+    cursor: "pointer",
+    fontSize: "14px",
+    lineHeight: "26px",
+    marginRight: "4px"
+  });
+  expandBtn.addEventListener("click", () => {
+    panel.__isExpanded = !panel.__isExpanded;
+    expandBtn.textContent = panel.__isExpanded ? "-" : "+";
+    expandBtn.style.color = panel.__isExpanded
+      ? "rgba(244,244,245,0.9)"
+      : "rgba(244,244,245,0.6)";
+    applySize();
+  });
+
+  const openBtn = document.createElement("button");
+  openBtn.type = "button";
+  openBtn.textContent = "↗";
+  Object.assign(openBtn.style, {
+    width: "28px",
+    height: "28px",
+    padding: "0",
+    border: "none",
+    background: "none",
+    color: "rgba(244,244,245,0.6)",
+    cursor: "pointer",
+    fontSize: "14px",
+    lineHeight: "26px",
+    marginRight: "4px"
+  });
+  openBtn.addEventListener("click", () => {
+    window.open(buildMapillaryAppUrl(lat, lng), "_blank");
+  });
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.textContent = "×";
+  Object.assign(closeBtn.style, {
+    width: "28px",
+    height: "28px",
+    padding: "0",
+    border: "none",
+    background: "none",
+    color: "rgba(244,244,245,0.6)",
+    cursor: "pointer",
+    fontSize: "20px",
+    lineHeight: "26px"
+  });
+  closeBtn.addEventListener("click", closeMapillaryPanel);
+
+  header.appendChild(title);
+  header.appendChild(expandBtn);
+  header.appendChild(openBtn);
+  header.appendChild(closeBtn);
+
+  const content = document.createElement("div");
+  Object.assign(content.style, {
+    flex: "1",
+    minHeight: "0",
+    position: "relative",
+    background: "rgba(0,0,0,0.3)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden"
+  });
+
+  const loading = document.createElement("div");
+  loading.textContent = "Loading Mapillary preview...";
+  Object.assign(loading.style, {
+    position: "absolute",
+    inset: "0",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "12px",
+    color: "rgba(244,244,245,0.55)",
+    textAlign: "center",
+    padding: "16px",
+    background: "rgba(0,0,0,0.35)",
+    zIndex: "1"
+  });
+  content.appendChild(loading);
+
+  const showFallback = (reason) => {
+    content.replaceChildren();
+    const fallback = document.createElement("div");
+    Object.assign(fallback.style, {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "8px",
+      padding: "16px",
+      textAlign: "center",
+      color: "rgba(244,244,245,0.7)",
+      fontSize: "12px",
+      lineHeight: "1.4"
+    });
+    fallback.innerHTML = `${reason}<br>Open in a new tab to view nearby photos.`;
+
+    const fallbackBtn = document.createElement("button");
+    fallbackBtn.type = "button";
+    fallbackBtn.textContent = "Open Mapillary";
+    Object.assign(fallbackBtn.style, {
+      border: "1px solid rgba(255,255,255,0.25)",
+      borderRadius: "8px",
+      padding: "6px 10px",
+      background: "rgba(255,255,255,0.06)",
+      color: "rgba(244,244,245,0.9)",
+      cursor: "pointer",
+      fontSize: "12px"
+    });
+    fallbackBtn.addEventListener("click", () => {
+      window.open(buildMapillaryAppUrl(lat, lng), "_blank");
+    });
+
+    fallback.appendChild(fallbackBtn);
+    content.appendChild(fallback);
+  };
+
+  const renderEmbedFromNearestImage = async () => {
+    const imageKey = await fetchNearestMapillaryImageKey(lat, lng);
+    if (!imageKey) {
+      const noToken = String(mapillaryClientToken || "").trim().length === 0;
+      showFallback(
+        noToken
+          ? "Mapillary inline preview not configured."
+          : "No nearby Mapillary photo found for this location."
+      );
+      return;
+    }
+
+    const iframe = document.createElement("iframe");
+    iframe.src = buildMapillaryEmbedUrl(imageKey);
+    iframe.style.width = "100%";
+    iframe.style.height = "100%";
+    iframe.style.border = "none";
+    iframe.style.borderRadius = "8px";
+    iframe.setAttribute("allow", "fullscreen");
+    iframe.setAttribute("sandbox", "allow-same-origin allow-popups allow-popups-to-escape-sandbox");
+
+    let iframeSettled = false;
+    const iframeTimeout = setTimeout(() => {
+      if (iframeSettled) return;
+      iframeSettled = true;
+      showFallback("Mapillary preview timed out.");
+    }, 7000);
+
+    iframe.addEventListener("load", () => {
+      if (iframeSettled) return;
+      iframeSettled = true;
+      clearTimeout(iframeTimeout);
+      content.replaceChildren();
+      content.appendChild(iframe);
+    });
+
+    iframe.addEventListener("error", () => {
+      if (iframeSettled) return;
+      iframeSettled = true;
+      clearTimeout(iframeTimeout);
+      showFallback("Mapillary preview could not load.");
+    });
+
+    content.appendChild(iframe);
+  };
+
+  void renderEmbedFromNearestImage();
+
+  const footer = document.createElement("div");
+  Object.assign(footer.style, {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "6px 10px",
+    background: "rgba(0,0,0,0.4)",
+    fontSize: "11px",
+    color: "rgba(244,244,245,0.6)",
+    flex: "0 0 auto",
+    backdropFilter: "blur(4px)"
+  });
+  footer.innerHTML = `<span>${lat.toFixed(4)}° ${lng.toFixed(4)}°</span><span style="font-size: 10px; color: rgba(244,244,245,0.4);">drag to move • open link for full screen</span>`;
+
+  panel.appendChild(header);
+  panel.appendChild(content);
+  panel.appendChild(footer);
+  container.appendChild(panel);
+
+  // --- DRAG ---
+  let isDragging = false;
+  let dragOffsetX = 0;
+  let dragOffsetY = 0;
+
+  header.style.cursor = "grab";
+  header.addEventListener("mousedown", (e) => {
+    if (e.target === expandBtn || e.target === closeBtn || e.target === openBtn) return;
+    isDragging = true;
+    dragOffsetX = e.clientX - panel.offsetLeft;
+    dragOffsetY = e.clientY - panel.offsetTop;
+    header.style.cursor = "grabbing";
+    e.preventDefault();
+  });
+
+  const onMouseMove = (e) => {
+    if (isDragging) {
+      const newLeft = e.clientX - dragOffsetX;
+      const newTop = e.clientY - dragOffsetY;
+      panel.style.left = `${Math.max(0, newLeft)}px`;
+      panel.style.bottom = "auto";
+      panel.style.top = `${Math.max(0, newTop)}px`;
+    }
+  };
+
+  const onMouseUp = () => {
+    isDragging = false;
+    header.style.cursor = "grab";
+  };
+
+  document.addEventListener("mousemove", onMouseMove);
+  document.addEventListener("mouseup", onMouseUp);
+
+  panel.__cleanup = () => {
+    document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mouseup", onMouseUp);
+  };
+}
+
 function attachStreetViewRightClick(map) {
   if (!map || map.__trailOverlayStreetViewAttached) return;
   map.__trailOverlayStreetViewAttached = true;
 
-  map.on("contextmenu", (e) => {
-    if (!googleMapsApiKey || googleMapsApiKey.trim().length === 0) {
-      return;
-    }
-
+  map.on("contextmenu", async (e) => {
     const lngLat = e.lngLat;
     if (!lngLat) return;
 
     e.preventDefault();
-    createStreetViewPanel(lngLat.lat, lngLat.lng);
+
+    // Fetch stored viewer preference from cache (default: mapillary)
+    const viewer = await getCachedRightClickViewer();
+
+    if (viewer === "mapillary") {
+      createMapillaryPanel(lngLat.lat, lngLat.lng);
+    } else if (viewer === "streetview") {
+      if (!googleMapsApiKey || googleMapsApiKey.trim().length === 0) {
+        return;
+      }
+      createStreetViewPanel(lngLat.lat, lngLat.lng);
+    }
   });
 }
 
@@ -4012,6 +4420,10 @@ async function main() {
     logMainStage(attemptId, "fetch_google_maps_api_key:start", startedAt);
     googleMapsApiKey = await fetchGoogleMapsApiKeyFromBridge();
     logMainStage(attemptId, "fetch_google_maps_api_key:done", startedAt);
+
+    logMainStage(attemptId, "fetch_mapillary_client_token:start", startedAt);
+    mapillaryClientToken = await getCachedMapillaryToken();
+    logMainStage(attemptId, "fetch_mapillary_client_token:done", startedAt);
 
     if (!cachedTrails || !cachedNetworks) {
       logMainStage(attemptId, "fetch_trails_networks:start", startedAt);
