@@ -49,6 +49,15 @@ async function copyDirRecursive(srcDir, dstDir) {
 }
 
 async function injectEnvDefaults(targetDir) {
+  // Only inject Mapillary token in development/local builds
+  const buildEnv = process.env.BUILD_ENV || process.env.NODE_ENV || 'production'
+  const isDevBuild = buildEnv === 'development' || buildEnv === 'dev'
+
+  if (!isDevBuild) {
+    // Skip token injection for production builds to avoid shipping credentials
+    return
+  }
+
   const mapillaryToken = String(process.env.NEXT_PUBLIC_MAPILLARY_ACCESS_TOKEN || '').trim()
   if (!mapillaryToken) return
 
@@ -67,6 +76,7 @@ async function injectEnvDefaults(targetDir) {
       ),
       'utf8'
     )
+    console.log('[build-extension-targets] Injected MAPILLARY_ACCESS_TOKEN (dev build)')
   } catch {
     /* ignore */
   }

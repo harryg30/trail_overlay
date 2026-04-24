@@ -3503,6 +3503,36 @@ async function fetchRightClickViewerFromBridge() {
   );
 }
 
+// Cache viewer preference and tokens to avoid async latency on every right-click
+let cachedRightClickViewer = null;
+let cachedMapillaryToken = null;
+
+async function getCachedRightClickViewer() {
+  if (cachedRightClickViewer === null) {
+    cachedRightClickViewer = await fetchRightClickViewerFromBridge();
+    // Listen for changes to viewer preference
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'RIGHT_CLICK_VIEWER_UPDATED') {
+        cachedRightClickViewer = event.data.viewer || 'mapillary';
+      }
+    });
+  }
+  return cachedRightClickViewer;
+}
+
+async function getCachedMapillaryToken() {
+  if (cachedMapillaryToken === null) {
+    cachedMapillaryToken = await fetchMapillaryClientTokenFromBridge();
+    // Listen for changes to token
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'MAPILLARY_TOKEN_UPDATED') {
+        cachedMapillaryToken = event.data.token || '';
+      }
+    });
+  }
+  return cachedMapillaryToken;
+}
+
 async function fetchMapillaryClientTokenFromBridge() {
   return fetchFromBridgeWithTimeout(
     "GET_MAPILLARY_CLIENT_TOKEN",
@@ -3975,14 +4005,14 @@ function buildMapillaryEmbedUrl(imageKey) {
 }
 
 async function fetchNearestMapillaryImageKey(lat, lng) {
-  const token = String(mapillaryClientToken || "").trim();
+  const token = String(cachedMapillaryToken || "").trim();
   if (!token) return null;
 
   const apiUrl = new URL("https://graph.mapillary.com/images");
   apiUrl.searchParams.set("access_token", token);
   apiUrl.searchParams.set("fields", "id,captured_at");
-  apiUrl.searchParams.set("lat", String(lat));
-  apiUrl.searchParams.set("lng", String(lng));
+  // Mapillary API uses 'll' parameter (lat,lng format) for location
+  apiUrl.searchParams.set("ll", `${lat},${lng}`);
   apiUrl.searchParams.set("radius", "25");
   apiUrl.searchParams.set("limit", "1");
 
@@ -4215,6 +4245,7 @@ function createMapillaryPanel(lat, lng) {
     iframe.style.border = "none";
     iframe.style.borderRadius = "8px";
     iframe.setAttribute("allow", "fullscreen");
+    iframe.setAttribute("sandbox", "allow-same-origin allow-popups allow-popups-to-escape-sandbox");
 
     let iframeSettled = false;
     const iframeTimeout = setTimeout(() => {
@@ -4311,8 +4342,8 @@ function attachStreetViewRightClick(map) {
 
     e.preventDefault();
 
-    // Fetch stored viewer preference (default: mapillary)
-    const viewer = await fetchRightClickViewerFromBridge();
+    // Fetch stored viewer preference from cache (default: mapillary)
+    const viewer = await getCachedRightClickViewer();
 
     if (viewer === "mapillary") {
       createMapillaryPanel(lngLat.lat, lngLat.lng);
@@ -4391,7 +4422,7 @@ async function main() {
     logMainStage(attemptId, "fetch_google_maps_api_key:done", startedAt);
 
     logMainStage(attemptId, "fetch_mapillary_client_token:start", startedAt);
-    mapillaryClientToken = await fetchMapillaryClientTokenFromBridge();
+    mapillaryClientToken = await getCachedMapillaryToken();
     logMainStage(attemptId, "fetch_mapillary_client_token:done", startedAt);
 
     if (!cachedTrails || !cachedNetworks) {

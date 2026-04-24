@@ -3,11 +3,12 @@ import { getSessionUserId } from '@/lib/auth'
 import { query, queryOne } from '@/lib/db'
 import { createGameSession, GameSession } from '@/lib/ride-matcher-utils'
 import { storeSession } from '../guess/route'
-import { Ride } from '@/lib/types'
+import { rowToRide } from '@/lib/api/mappers'
+import type { RideRow } from '@/lib/api/mappers'
 
-let cachedDevSession: GameSession | null = null
+const cachedDevSessions = new Map<string, GameSession>()
 
-export async function GET(req: NextRequest) {
+export async function GET(_req: NextRequest) {
   try {
     // Check authentication
     const userId = await getSessionUserId()
@@ -16,22 +17,13 @@ export async function GET(req: NextRequest) {
     }
 
     // Fetch all rides for user
-    const ridesData = await query<any>(
+    const ridesData = await query<RideRow>(
       'SELECT id, name, distance, elevation, polyline, point_count, timestamp, strava_activity_id FROM rides WHERE user_id = $1 ORDER BY COALESCE(timestamp, created_at) DESC',
       [userId]
     )
 
-    // Map to Ride interface
-    const rides: Ride[] = ridesData.map((row: any) => ({
-      id: row.id,
-      name: row.name,
-      distance: row.distance,
-      elevation: row.elevation,
-      polyline: row.polyline,
-      pointCount: row.point_count,
-      timestamp: row.timestamp ? new Date(row.timestamp) : new Date(0),
-      stravaActivityId: row.strava_activity_id,
-    }))
+    // Map to Ride interface using shared mapper
+    const rides = ridesData.map(rowToRide)
 
     // Check minimum rides
     if (rides.length < 5) {
@@ -72,14 +64,14 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Create or return cached dev session
+    // Create or return cached dev session (scoped per user)
     let session: GameSession
     if (isDev) {
-      if (cachedDevSession) {
-        session = cachedDevSession
+      if (cachedDevSessions.has(userId)) {
+        session = cachedDevSessions.get(userId)!
       } else {
         session = createGameSession(rides)
-        cachedDevSession = session
+        cachedDevSessions.set(userId, session)
       }
     } else {
       session = createGameSession(rides)
@@ -89,7 +81,7 @@ export async function GET(req: NextRequest) {
     await query('UPDATE users SET last_game_started_at = NOW() WHERE id = $1', [userId])
 
     // Store session for later retrieval during guessing
-    storeSession(session)
+    storeSession(session, userId)
 
     return NextResponse.json(session)
   } catch (err) {

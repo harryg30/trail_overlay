@@ -4,7 +4,7 @@ export interface Ride {
   distance: number;
   elevation: number;
   polyline: [number, number][];
-  timestamp: Date;
+  timestamp: Date | null;
   pointCount: number;
   stravaActivityId?: number;
 }
