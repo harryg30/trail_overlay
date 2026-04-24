@@ -3,5 +3,6 @@
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_game_started_at TIMESTAMPTZ;
 
--- Create index for efficient rate limit checks (CONCURRENTLY to avoid locking)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS users_last_game_started_at_idx ON users (last_game_started_at);
+-- Create index for efficient rate limit checks
+-- Note: Cannot use CONCURRENTLY in migration scripts (runs in transaction block)
+CREATE INDEX IF NOT EXISTS users_last_game_started_at_idx ON users (last_game_started_at);
