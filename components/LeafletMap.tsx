@@ -23,19 +23,23 @@ import type { StravaSegmentFeature } from '@/lib/strava-segments'
 import type { StagedTrailApi } from '@/hooks/useStagedTrail'
 import { FloatingDraggableToolsPanel } from '@/components/map/FloatingDraggableToolsPanel'
 import { AddTrailPanel } from '@/components/trail/AddTrailPanel'
+import {
+  OfficialMapAlignBanner,
+  PinPlacementBanner,
+  MobileAddPhotoFab,
+} from '@/components/map/MapOverlayBanners'
 import { resolveMapCursor } from '@/lib/modes/map-cursor'
 import { snapToNearestTrailPoint } from '@/lib/geo-utils'
 import { nearestPolylineSegment } from '@/lib/geo-edit'
 import { snapToNearestWay, routeBetweenPoints, routeThroughPoints } from '@/lib/valhalla-utils'
 import { attachVertexInsertHoverCursor } from '@/lib/map-vertex-insert-cursor'
+import { createTopLeftToolControl } from '@/lib/map-top-left-tools'
 import {
   MAP,
-  basemapControlSvg,
   catalogLineHints,
   drawNetworkNodeDivHtml,
   drawTrailNodeDivHtml,
   drawInsertMidpointDivHtml,
-  locateControlSvg,
   mapPopupStyles,
   networkCentroidLabelHtml,
   networkPolygonLeafletStyle,
@@ -53,8 +57,6 @@ import {
   writeStoredBasemapStyle,
   type MapBaseStyle,
 } from '@/lib/map-basemap'
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faCamera } from '@fortawesome/free-solid-svg-icons'
 
 export interface LeafletMapProps {
   rides: Ride[]
@@ -337,144 +339,15 @@ export default function LeafletMap({
   const applyBasemapStyleRef = useRef(applyBasemapStyle)
   applyBasemapStyleRef.current = applyBasemapStyle
 
-  /** Locate + basemap tools under native zoom; basemap panel lists styles and persists via {@link writeStoredBasemapStyle}. */
   const installTopLeftToolControls = useCallback((map: L.Map) => {
-    const ctl = L.Control.extend({
-      onAdd(this: L.Control) {
-        const p = MAP
-        const wrap = L.DomUtil.create('div')
-        wrap.style.cssText =
-          'margin-top:44px;display:flex;flex-direction:column;align-items:flex-start;gap:4px'
-
-        const locateBtn = L.DomUtil.create('button', '', wrap) as HTMLButtonElement
-        locateBtn.type = 'button'
-        locateBtn.title = 'Zoom to my location'
-        locateBtn.setAttribute('aria-label', 'Zoom to my location')
-        locateBtn.style.cssText =
-          `width:30px;height:30px;border-radius:4px;background:${p.card};border:2px solid ${p.foreground};` +
-          `box-shadow:2px 2px 0 0 ${p.foreground};cursor:pointer;display:flex;align-items:center;justify-content:center`
-        locateBtn.innerHTML = locateControlSvg(p)
-
-        const basemapOuter = L.DomUtil.create('div', '', wrap)
-        basemapOuter.style.cssText = 'position:relative'
-
-        const basemapToggle = L.DomUtil.create('button', '', basemapOuter) as HTMLButtonElement
-        basemapToggle.type = 'button'
-        basemapToggle.title = 'Base map style'
-        basemapToggle.setAttribute('aria-label', 'Base map style')
-        basemapToggle.setAttribute('aria-expanded', 'false')
-        basemapToggle.setAttribute('aria-haspopup', 'true')
-        basemapToggle.style.cssText =
-          `width:30px;height:30px;border-radius:4px;background:${p.card};border:2px solid ${p.foreground};` +
-          `box-shadow:2px 2px 0 0 ${p.foreground};cursor:pointer;display:flex;align-items:center;justify-content:center`
-        basemapToggle.innerHTML = basemapControlSvg(p)
-
-        const panel = L.DomUtil.create('div', '', basemapOuter) as HTMLDivElement
-        panel.setAttribute('role', 'group')
-        panel.setAttribute('aria-label', 'Choose base map style')
-        panel.style.cssText =
-          `display:none;flex-direction:column;gap:6px;position:absolute;top:34px;left:0;z-index:1000;min-width:152px;` +
-          `padding:8px;border-radius:4px;background:${p.card};border:2px solid ${p.foreground};box-shadow:2px 2px 0 0 ${p.foreground}`
-
-        const heading = L.DomUtil.create('div', '', panel) as HTMLDivElement
-        heading.textContent = 'Base map'
-        heading.style.cssText = `font:600 10px/1.2 system-ui,sans-serif;text-transform:uppercase;letter-spacing:0.06em;color:${p.mutedLabel}`
-
-        const row = L.DomUtil.create('div', '', panel) as HTMLDivElement
-        row.style.cssText = 'display:flex;gap:4px'
-
-        const classicBtn = L.DomUtil.create('button', '', row) as HTMLButtonElement
-        classicBtn.type = 'button'
-        classicBtn.textContent = 'Classic'
-
-        const catalogBtn = L.DomUtil.create('button', '', row) as HTMLButtonElement
-        catalogBtn.type = 'button'
-        catalogBtn.textContent = 'Catalog'
-
-        const btnBase =
-          `flex:1;border-radius:4px;border:2px solid ${p.foreground};cursor:pointer;` +
-          `font:700 11px/1 system-ui,sans-serif;text-transform:uppercase;letter-spacing:0.04em;padding:6px 6px`
-
-        const applySelection = (style: MapBaseStyle) => {
-          const classicSel = style === 'osm'
-          classicBtn.style.cssText =
-            btnBase +
-            `;background:${classicSel ? p.primary : p.mud};color:${classicSel ? p.primaryFg : p.foreground}` +
-            (classicSel ? `;box-shadow:1px 1px 0 0 ${p.foreground}` : '')
-          catalogBtn.style.cssText =
-            btnBase +
-            `;background:${!classicSel ? p.primary : p.mud};color:${!classicSel ? p.primaryFg : p.foreground}` +
-            (!classicSel ? `;box-shadow:1px 1px 0 0 ${p.foreground}` : '')
-        }
-        applySelection(basemapStyleRef.current)
-
-        const closePanel = () => {
-          panel.style.display = 'none'
-          basemapToggle.setAttribute('aria-expanded', 'false')
-        }
-        const openPanel = () => {
-          applySelection(basemapStyleRef.current)
-          panel.style.display = 'flex'
-          basemapToggle.setAttribute('aria-expanded', 'true')
-        }
-
-        const onMapClick = () => {
-          closePanel()
-        }
-        map.on('click', onMapClick)
-
-        // Store for onRemove (Leaflet may use a different `this` context)
-        ;(this as unknown as { _trailOnMapClick?: () => void })._trailOnMapClick = onMapClick
-
-        basemapToggle.onclick = (ev) => {
-          L.DomEvent.stopPropagation(ev)
-          if (panel.style.display === 'flex') closePanel()
-          else openPanel()
-        }
-
-        classicBtn.onclick = (ev) => {
-          L.DomEvent.stopPropagation(ev)
-          applyBasemapStyleRef.current('osm')
-          applySelection('osm')
-          closePanel()
-        }
-        catalogBtn.onclick = (ev) => {
-          L.DomEvent.stopPropagation(ev)
-          applyBasemapStyleRef.current('stylized')
-          applySelection('stylized')
-          closePanel()
-        }
-
-        locateBtn.onclick = () => {
-          if (!('geolocation' in navigator)) return
-          navigator.geolocation.getCurrentPosition(
-            (pos) => {
-              const lat = pos.coords.latitude
-              const lon = pos.coords.longitude
-              const accuracyM = pos.coords.accuracy
-              setUserLocation({ lat, lon, accuracyM })
-              mapRef.current?.flyTo([lat, lon], Math.max(mapRef.current.getZoom(), 15), { duration: 0.8 })
-            },
-            () => {
-              /* ignore */
-            },
-            { enableHighAccuracy: true, timeout: 8000, maximumAge: 15_000 }
-          )
-        }
-
-        L.DomEvent.disableClickPropagation(wrap)
-        L.DomEvent.disableScrollPropagation(wrap)
-
-        return wrap
-      },
-      onRemove(this: L.Control) {
-        const h = (this as unknown as { _trailOnMapClick?: () => void })._trailOnMapClick
-        if (h) map.off('click', h)
+    return createTopLeftToolControl(map, {
+      getCurrentBasemapStyle: () => basemapStyleRef.current,
+      applyBasemapStyle: (style) => applyBasemapStyleRef.current(style),
+      onLocate: (lat, lon, accuracyM) => {
+        setUserLocation({ lat, lon, accuracyM })
+        mapRef.current?.flyTo([lat, lon], Math.max(mapRef.current.getZoom(), 15), { duration: 0.8 })
       },
     })
-    const instance = new ctl({ position: 'topleft' })
-    instance.addTo(map)
-    return instance
   }, [])
 
   // Effect 1: map init
@@ -2272,38 +2145,13 @@ export default function LeafletMap({
         data-basemap={basemapStyle}
         suppressHydrationWarning
       />
-      {officialMapAlignHandler && (
-        <div className="absolute left-1/2 top-3 z-[1001] flex max-w-[min(92vw,24rem)] -translate-x-1/2 items-center gap-2 border-2 border-electric/80 bg-primary/15 px-3 py-1.5 shadow-[3px_3px_0_0_var(--foreground)]">
-          <p className="truncate text-xs font-semibold text-foreground">
-            Map align: tap the same feature on the basemap
-          </p>
-        </div>
-      )}
+      {officialMapAlignHandler && <OfficialMapAlignBanner />}
       {(placingPhoto || placingTrailPhoto) && (
-        <div
-          className={`absolute left-1/2 top-3 z-[1000] flex max-w-[min(90vw,22rem)] -translate-x-1/2 items-center gap-2 border-2 px-3 py-1.5 shadow-[3px_3px_0_0_var(--map-chrome-fg)] dark:border-[var(--map-chrome-fg)] dark:shadow-[3px_3px_0_0_var(--map-chrome-fg)] ${
-            placingTrailPhoto && !placingPhoto
-              ? 'border-forest/80 bg-forest/15 dark:bg-[color-mix(in_oklch,var(--map-chrome-bg),var(--forest)_18%)]'
-              : 'border-primary/80 bg-primary/15 dark:bg-[color-mix(in_oklch,var(--map-chrome-bg),var(--primary)_20%)]'
-          }`}
-        >
-          <p
-            className={`truncate text-xs font-semibold dark:text-[var(--map-chrome-fg)] ${
-              placingTrailPhoto && !placingPhoto ? 'text-forest' : 'text-foreground'
-            }`}
-          >
-            Tap on or near a trail line to pin
-          </p>
-          <button
-            type="button"
-            onClick={onCancelPlace}
-            className={`shrink-0 text-xs font-bold uppercase tracking-wide underline-offset-2 hover:underline dark:text-[var(--map-chrome-fg)] ${
-              placingTrailPhoto && !placingPhoto ? 'text-forest' : 'text-primary'
-            }`}
-          >
-            Cancel
-          </button>
-        </div>
+        <PinPlacementBanner
+          placingPhoto={placingPhoto}
+          placingTrailPhoto={placingTrailPhoto}
+          onCancelPlace={onCancelPlace}
+        />
       )}
 
       {/* Unified add-trail panel (drag handle persists position in localStorage) */}
@@ -2350,23 +2198,8 @@ export default function LeafletMap({
       )}
 
 
-      {/* Mobile floating action button: enter add-trail-photo mode even when drawer is closed */}
       {isCoarsePointer && onEditModeChange && (
-        <button
-          type="button"
-          onClick={() => {
-            onEditModeChange(editMode === 'add-trail-photo' ? null : 'add-trail-photo')
-          }}
-          aria-label={editMode === 'add-trail-photo' ? 'Exit add photo mode' : 'Add photo'}
-          className={`absolute bottom-6 right-4 z-1000 flex h-12 w-12 items-center justify-center rounded-full border-2 shadow-[3px_3px_0_0_var(--map-chrome-fg)] transition-colors sm:hidden ${
-            editMode === 'add-trail-photo'
-              ? 'border-foreground bg-forest text-secondary-foreground dark:border-[var(--map-chrome-fg)] dark:bg-[color-mix(in_oklch,var(--map-chrome-bg),var(--forest)_28%)] dark:text-[var(--map-chrome-fg)] dark:shadow-[3px_3px_0_0_var(--map-chrome-fg)]'
-              : 'border-foreground bg-card text-forest dark:border-[var(--map-chrome-fg)] dark:bg-[var(--map-chrome-bg)] dark:text-[var(--map-chrome-fg)] dark:shadow-[3px_3px_0_0_var(--map-chrome-fg)]'
-          }`}
-          title={editMode === 'add-trail-photo' ? 'Cancel' : 'Add trail photo'}
-        >
-          <FontAwesomeIcon icon={faCamera} className="w-6 h-6" />
-        </button>
+        <MobileAddPhotoFab editMode={editMode} onEditModeChange={onEditModeChange} />
       )}
     </div>
   )

@@ -24,15 +24,19 @@ import type {
 import type { SessionUser } from '@/lib/auth'
 import {
   polylineDistanceKm,
+  polylinesEqual,
   estimatedElevationGainFt,
   generateAveragedTrail,
   clipPolylineToCorridor,
-  trailPhotoMapPoint,
 } from '@/lib/geo-utils'
 import type { MapBounds } from '@/lib/geo-utils'
 import { insertPointAfter, removePointAt, removePointRange } from '@/lib/geo-edit'
 import { useEditMode } from '@/hooks/useEditMode'
 import { useStagedTrail } from '@/hooks/useStagedTrail'
+import { useDebouncedBoundsFetch } from '@/hooks/useDebouncedBoundsFetch'
+import { useTrailPhotos } from '@/hooks/useTrailPhotos'
+import { useUrlParamSync } from '@/hooks/useUrlParamSync'
+import { useRides } from '@/hooks/useRides'
 import { fetchOsmWays, OsmFetchError, type OsmWayFeature } from '@/lib/overpass'
 import { fetchStravaSegments, type StravaSegmentFeature } from '@/lib/strava-segments'
 import { loadDemoRides } from '@/lib/demo-rides'
@@ -105,12 +109,10 @@ export default function ClientPage({
     router.replace(`?${p.toString()}`, { scroll: false })
   }, [router, searchParams])
 
-  const [rides, setRides] = useState<Ride[]>([])
+  const { rides, setRides, hiddenRideIds, setHiddenRideIds, loadRides } = useRides(user)
   const [trails, setTrails] = useState<Trail[]>([])
   const [networks, setNetworks] = useState<Network[]>([])
   const [draftTrails, setDraftTrails] = useState<DraftTrail[]>([])
-  const [hiddenRideIds, setHiddenRideIds] = useState<Set<string>>(new Set())
-  const ridesLoadedRef = useRef(false)
   const [hiddenNetworkIds, setHiddenNetworkIds] = useState<Set<string>>(new Set())
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [showAnnouncement, setShowAnnouncement] = useState(false)
@@ -166,12 +168,6 @@ export default function ClientPage({
   const drawToolActive = addTrailMode && staged.activeTool === 'draw'
   const osmToolActive = addTrailMode && staged.activeTool === 'osm'
 
-  const [osmWays, setOsmWays] = useState<OsmWayFeature[]>([])
-  const [osmLoading, setOsmLoading] = useState(false)
-  const [osmError, setOsmError] = useState<string | null>(null)
-  const [stravaSegments, setStravaSegments] = useState<StravaSegmentFeature[]>([])
-  const [stravaLoading, setStravaLoading] = useState(false)
-  const [stravaError, setStravaError] = useState<string | null>(null)
   const [gpxActiveRideId, setGpxActiveRideId] = useState<string | null>(null)
   /** When set, save-draft updates this row instead of creating a new draft (edit from drafts list). */
   const [editingDraftLocalId, setEditingDraftLocalId] = useState<string | null>(null)
@@ -203,15 +199,6 @@ export default function ClientPage({
     }
   }, [editMode, selectedTrail]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const polylinesEqual = useCallback((a: [number, number][], b: [number, number][]) => {
-    if (a === b) return true
-    if (a.length !== b.length) return false
-    for (let i = 0; i < a.length; i++) {
-      if (a[i][0] !== b[i][0] || a[i][1] !== b[i][1]) return false
-    }
-    return true
-  }, [])
-
   const applyRefineTrailEdit = useCallback((updater: (prev: [number, number][]) => [number, number][]) => {
     const prev =
       refinedPolylineRef.current ??
@@ -222,7 +209,6 @@ export default function ClientPage({
     setRefineTrailHistoryFuture([])
     setRefinedPolyline(next)
   }, [
-    polylinesEqual,
     selectedTrail,
     setRefineTrailHistoryFuture,
     setRefineTrailHistoryPast,
@@ -241,52 +227,28 @@ export default function ClientPage({
   const [fetchingPhotosId, setFetchingPhotosId] = useState<string | null>(null)
   const [placingPhoto, setPlacingPhoto] = useState<RidePhoto | null>(null)
   const [placingTrailPhoto, setPlacingTrailPhoto] = useState<TrailPhoto | null>(null)
-  /** Community-visible pins (server: accepted + on trail). */
-  const [communityTrailPhotos, setCommunityTrailPhotos] = useState<TrailPhoto[]>([])
-  /** Logged-in user’s unpinned / in-progress uploads (private). */
-  const [myUnpinnedTrailPhotos, setMyUnpinnedTrailPhotos] = useState<TrailPhoto[]>([])
-  /** Demo-only photos (object URLs; never POST). */
-  const [localTrailPhotos, setLocalTrailPhotos] = useState<TrailPhoto[]>([])
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null)
+  const {
+    communityTrailPhotos,
+    setCommunityTrailPhotos,
+    myUnpinnedTrailPhotos,
+    setMyUnpinnedTrailPhotos,
+    localTrailPhotos,
+    setLocalTrailPhotos,
+    mapTrailPhotos,
+  } = useTrailPhotos(user, mapBounds)
   const osmTooZoomedOut = addTrailMode && !!mapBounds && (mapBounds.north - mapBounds.south) > 0.15
   const [showOnMapOnly, setShowOnMapOnly] = useState(false)
   const [viewingTrail, setViewingTrail] = useState<Trail | null>(initialTrail)
   const [selectedActivityItem, setSelectedActivityItem] = useState<TrailActivityItem | null>(null)
 
-  // Track whether URL sync effects have fired for the first time.
-  // We skip the first fire so we don't clobber URL params that were set by the server.
-  const urlSyncMountedRef = useRef(false)
-
-  // Sync tab to URL
-  useEffect(() => {
-    if (!urlSyncMountedRef.current) return
-    updateParams({ tab: drawerTab === 'trails' ? null : drawerTab })
-  }, [drawerTab]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Sync viewing trail + clear photo when trail changes/closes
-  useEffect(() => {
-    if (!urlSyncMountedRef.current) {
-      urlSyncMountedRef.current = true
-      return  // skip first fire — URL already correct from server render
-    }
-    updateParams({
-      trail: viewingTrail ? String(viewingTrail.id) : null,
-      photo: null,  // clear photo on trail change; TrailDetailPanel restores it via onPhotoOpen if initialPhotoId is set
-    })
-    if (!viewingTrail) setPendingInitialPhotoId(null)
-  }, [viewingTrail?.id]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Sync selected activity item (revision modal) to URL
-  useEffect(() => {
-    if (!urlSyncMountedRef.current) return
-    updateParams({
-      revision: selectedActivityItem?.revisionId ?? null,
-      // Keep trail param pointing at the revision's trail while modal is open
-      trail: selectedActivityItem
-        ? selectedActivityItem.trailId
-        : viewingTrail ? String(viewingTrail.id) : null,
-    })
-  }, [selectedActivityItem?.revisionId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useUrlParamSync({
+    drawerTab,
+    viewingTrail,
+    selectedActivityItem,
+    updateParams,
+    onClearPendingInitialPhotoId: () => setPendingInitialPhotoId(null),
+  })
 
   const [mapFlyToRequest, setMapFlyToRequest] = useState<{
     seq: number
@@ -308,64 +270,19 @@ export default function ClientPage({
     }
   }, [editMode])
 
-  const osmFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const osmAbortRef = useRef<AbortController | null>(null)
-
   // Fetch OSM ways only when the OSM tool is active
   const osmActive = addTrailMode && staged.activeTool === 'osm'
-  useEffect(() => {
-    if (!osmActive) {
-      setOsmWays([])
-      setOsmLoading(false)
-      setOsmError(null)
-      if (osmFetchTimerRef.current) clearTimeout(osmFetchTimerRef.current)
-      if (osmAbortRef.current) osmAbortRef.current.abort()
-      return
-    }
-    if (!mapBounds) return
-
-    const latSpan = mapBounds.north - mapBounds.south
-    if (latSpan > 0.15) {
-      setOsmWays([])
-      setOsmLoading(false)
-      return
-    }
-
-    if (osmFetchTimerRef.current) clearTimeout(osmFetchTimerRef.current)
-    if (osmAbortRef.current) osmAbortRef.current.abort()
-
-    setOsmLoading(true)
-    setOsmError(null)
-    osmFetchTimerRef.current = setTimeout(() => {
-      const controller = new AbortController()
-      osmAbortRef.current = controller
-      fetchOsmWays(mapBounds, undefined, controller.signal)
-        .then((ways) => {
-          if (!controller.signal.aborted) {
-            setOsmWays(ways)
-            setOsmError(null)
-          }
-        })
-        .catch((err) => {
-          if (!controller.signal.aborted) {
-            console.error('Overpass fetch error:', err)
-            if (err instanceof OsmFetchError) {
-              setOsmError(err.message)
-            } else {
-              setOsmError('Failed to load OSM data. Pan the map to retry.')
-            }
-          }
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setOsmLoading(false)
-        })
-    }, 800)
-
-    return () => {
-      if (osmFetchTimerRef.current) clearTimeout(osmFetchTimerRef.current)
-      if (osmAbortRef.current) osmAbortRef.current.abort()
-    }
-  }, [osmActive, mapBounds]) // eslint-disable-line react-hooks/exhaustive-deps
+  const {
+    data: osmWays,
+    loading: osmLoading,
+    error: osmError,
+  } = useDebouncedBoundsFetch<OsmWayFeature>({
+    enabled: osmActive,
+    bounds: mapBounds,
+    fetcher: (bounds, signal) => fetchOsmWays(bounds, undefined, signal),
+    formatError: (err) =>
+      err instanceof OsmFetchError ? err.message : 'Failed to load OSM data. Pan the map to retry.',
+  })
 
   // Reset staged trail + GPX ride when leaving add-trail mode
   useEffect(() => {
@@ -382,59 +299,18 @@ export default function ClientPage({
   }, [staged.toggleOsmWay]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch Strava segments only when the Strava tool is active
-  const stravaFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const stravaAbortRef = useRef<AbortController | null>(null)
   const stravaActive = addTrailMode && staged.activeTool === 'strava' && !!user
-
-  useEffect(() => {
-    if (!stravaActive) {
-      setStravaSegments([])
-      setStravaLoading(false)
-      setStravaError(null)
-      if (stravaFetchTimerRef.current) clearTimeout(stravaFetchTimerRef.current)
-      if (stravaAbortRef.current) stravaAbortRef.current.abort()
-      return
-    }
-    if (!mapBounds) return
-
-    const latSpan = mapBounds.north - mapBounds.south
-    if (latSpan > 0.15) {
-      setStravaSegments([])
-      setStravaLoading(false)
-      return
-    }
-
-    if (stravaFetchTimerRef.current) clearTimeout(stravaFetchTimerRef.current)
-    if (stravaAbortRef.current) stravaAbortRef.current.abort()
-
-    setStravaLoading(true)
-    setStravaError(null)
-    stravaFetchTimerRef.current = setTimeout(() => {
-      const controller = new AbortController()
-      stravaAbortRef.current = controller
-      fetchStravaSegments(mapBounds, 'riding', controller.signal)
-        .then((segs) => {
-          if (!controller.signal.aborted) {
-            setStravaSegments(segs)
-            setStravaError(null)
-          }
-        })
-        .catch((err) => {
-          if (!controller.signal.aborted) {
-            console.error('Strava segments fetch error:', err)
-            setStravaError(err instanceof Error ? err.message : 'Failed to load Strava segments.')
-          }
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setStravaLoading(false)
-        })
-    }, 800)
-
-    return () => {
-      if (stravaFetchTimerRef.current) clearTimeout(stravaFetchTimerRef.current)
-      if (stravaAbortRef.current) stravaAbortRef.current.abort()
-    }
-  }, [stravaActive, mapBounds]) // eslint-disable-line react-hooks/exhaustive-deps
+  const {
+    data: stravaSegments,
+    loading: stravaLoading,
+    error: stravaError,
+  } = useDebouncedBoundsFetch<StravaSegmentFeature>({
+    enabled: stravaActive,
+    bounds: mapBounds,
+    fetcher: (bounds, signal) => fetchStravaSegments(bounds, 'riding', signal),
+    formatError: (err) =>
+      err instanceof Error ? err.message : 'Failed to load Strava segments.',
+  })
 
   const handleStravaSegmentSelected = useCallback((feature: StravaSegmentFeature) => {
     staged.toggleStravaSegment(feature.segmentId, feature.name, feature.polyline)
@@ -455,67 +331,6 @@ export default function ClientPage({
       id: network.id,
     }))
   }, [])
-
-  const loadMyUnpinnedTrailPhotos = useCallback(() => {
-    if (!user) return
-    fetch('/api/trail-photos/mine')
-      .then((r) => r.json())
-      .then((data) => {
-        if (!data?.photos) return
-        setMyUnpinnedTrailPhotos(data.photos as TrailPhoto[])
-      })
-      .catch(() => {})
-  }, [user])
-
-  useEffect(() => {
-    if (!user) {
-      setMyUnpinnedTrailPhotos([])
-      return
-    }
-    loadMyUnpinnedTrailPhotos()
-  }, [loadMyUnpinnedTrailPhotos, user])
-
-  // Community trail photo pins for the current map bounds (pinned-to-trail only on server)
-  useEffect(() => {
-    if (!mapBounds) return
-    let cancelled = false
-    const { north, south, east, west } = mapBounds
-    fetch(`/api/trail-photos?north=${north}&south=${south}&east=${east}&west=${west}&limit=500`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled || !data?.photos) return
-        const photos = Array.isArray(data.photos) ? (data.photos as TrailPhoto[]) : []
-        setCommunityTrailPhotos(
-          [...photos].sort((a, b) => {
-            const at = new Date(a.createdAt).getTime()
-            const bt = new Date(b.createdAt).getTime()
-            return bt - at
-          })
-        )
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [mapBounds])
-
-  const mapTrailPhotos = useMemo(() => {
-    const byId = new Map<string, TrailPhoto>()
-    for (const p of communityTrailPhotos) byId.set(p.id, p)
-    for (const p of myUnpinnedTrailPhotos) {
-      const pt = trailPhotoMapPoint(p)
-      if (pt != null) byId.set(p.id, p)
-    }
-    for (const p of localTrailPhotos) {
-      const pt = trailPhotoMapPoint(p)
-      if (pt != null) byId.set(p.id, p)
-    }
-    return Array.from(byId.values()).sort((a, b) => {
-      const at = new Date(a.createdAt).getTime()
-      const bt = new Date(b.createdAt).getTime()
-      return bt - at
-    })
-  }, [communityTrailPhotos, myUnpinnedTrailPhotos, localTrailPhotos])
 
   useEffect(() => {
     fetch('/api/trails')
@@ -566,29 +381,6 @@ export default function ClientPage({
       })
       .catch(console.error)
   }, [])
-
-  const loadRides = useCallback(async () => {
-    if (!user) return
-    const r = await fetch('/api/rides')
-    const data = await r.json()
-    if (data.success) {
-      setRides(data.rides)
-      const saved = localStorage.getItem('visible_ride_ids')
-      const visibleIds = saved ? new Set(JSON.parse(saved) as string[]) : new Set<string>()
-      setHiddenRideIds(new Set(data.rides.map((ride: Ride) => ride.id).filter((id: string) => !visibleIds.has(id))))
-      ridesLoadedRef.current = true
-    }
-  }, [user])
-
-  useEffect(() => {
-    if (!ridesLoadedRef.current) return
-    const visibleIds = rides.filter((r) => !hiddenRideIds.has(r.id)).map((r) => r.id)
-    localStorage.setItem('visible_ride_ids', JSON.stringify(visibleIds))
-  }, [hiddenRideIds, rides])
-
-  useEffect(() => {
-    loadRides()
-  }, [loadRides])
 
   const trimSegment = useMemo<TrimSegment | null>(() => {
     if (!trimStart || !trimEnd) return null
@@ -1421,7 +1213,7 @@ export default function ClientPage({
   }, [])
 
   return (
-    <div className="flex h-screen relative">
+    <div className="flex h-screen relative overflow-hidden">
       {/* Mobile backdrop */}
       {mobileMenuOpen && (
         <div
