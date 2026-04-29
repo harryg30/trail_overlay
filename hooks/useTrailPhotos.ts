@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import type { TrailPhoto } from '@/lib/types'
 import type { SessionUser } from '@/lib/auth'
 import type { MapBounds } from '@/lib/geo-utils'
@@ -32,24 +32,32 @@ export function useTrailPhotos(
   const [myUnpinnedTrailPhotos, setMyUnpinnedTrailPhotos] = useState<TrailPhoto[]>([])
   const [localTrailPhotos, setLocalTrailPhotos] = useState<TrailPhoto[]>([])
 
-  const loadMyUnpinnedTrailPhotos = useCallback(() => {
+  useEffect(() => {
     if (!user) return
-    fetch('/api/trail-photos/mine')
+
+    let cancelled = false
+    const controller = new AbortController()
+
+    fetch('/api/trail-photos/mine', { signal: controller.signal })
       .then((r) => r.json())
       .then((data) => {
-        if (!data?.photos) return
+        if (cancelled || controller.signal.aborted || !data?.photos) return
         setMyUnpinnedTrailPhotos(data.photos as TrailPhoto[])
       })
-      .catch(() => {})
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+      })
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
   }, [user])
 
-  useEffect(() => {
-    if (!user) {
-      setMyUnpinnedTrailPhotos([])
-      return
-    }
-    loadMyUnpinnedTrailPhotos()
-  }, [loadMyUnpinnedTrailPhotos, user])
+  const visibleMyUnpinnedTrailPhotos = useMemo(
+    () => (user ? myUnpinnedTrailPhotos : []),
+    [myUnpinnedTrailPhotos, user]
+  )
 
   // Community trail photo pins for the current map bounds (pinned-to-trail only on server)
   useEffect(() => {
@@ -78,7 +86,7 @@ export function useTrailPhotos(
   const mapTrailPhotos = useMemo(() => {
     const byId = new Map<string, TrailPhoto>()
     for (const p of communityTrailPhotos) byId.set(p.id, p)
-    for (const p of myUnpinnedTrailPhotos) {
+    for (const p of visibleMyUnpinnedTrailPhotos) {
       const pt = trailPhotoMapPoint(p)
       if (pt != null) byId.set(p.id, p)
     }
@@ -91,12 +99,12 @@ export function useTrailPhotos(
       const bt = new Date(b.createdAt).getTime()
       return bt - at
     })
-  }, [communityTrailPhotos, myUnpinnedTrailPhotos, localTrailPhotos])
+  }, [communityTrailPhotos, visibleMyUnpinnedTrailPhotos, localTrailPhotos])
 
   return {
     communityTrailPhotos,
     setCommunityTrailPhotos,
-    myUnpinnedTrailPhotos,
+    myUnpinnedTrailPhotos: visibleMyUnpinnedTrailPhotos,
     setMyUnpinnedTrailPhotos,
     localTrailPhotos,
     setLocalTrailPhotos,

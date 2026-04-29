@@ -63,7 +63,7 @@ export function MobileAddPhotoFab({ editMode, onEditModeChange }: MobileAddPhoto
       onClick={() => onEditModeChange(active ? null : 'add-trail-photo')}
       aria-label={active ? 'Exit add photo mode' : 'Add photo'}
       title={active ? 'Cancel' : 'Add trail photo'}
-      className={`absolute bottom-6 right-4 z-1000 flex h-12 w-12 items-center justify-center rounded-full border-2 shadow-[3px_3px_0_0_var(--map-chrome-fg)] transition-colors sm:hidden ${
+      className={`absolute bottom-6 right-4 z-[1000] flex h-12 w-12 items-center justify-center rounded-full border-2 shadow-[3px_3px_0_0_var(--map-chrome-fg)] transition-colors sm:hidden ${
         active
           ? 'border-foreground bg-forest text-secondary-foreground dark:border-[var(--map-chrome-fg)] dark:bg-[color-mix(in_oklch,var(--map-chrome-bg),var(--forest)_28%)] dark:text-[var(--map-chrome-fg)] dark:shadow-[3px_3px_0_0_var(--map-chrome-fg)]'
           : 'border-foreground bg-card text-forest dark:border-[var(--map-chrome-fg)] dark:bg-[var(--map-chrome-bg)] dark:text-[var(--map-chrome-fg)] dark:shadow-[3px_3px_0_0_var(--map-chrome-fg)]'
