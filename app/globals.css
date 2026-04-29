@@ -186,6 +186,16 @@
 }
 
 @layer utilities {
+  .cookie-consent-visible {
+    padding-bottom: 12rem;
+  }
+
+  @media (min-width: 640px) {
+    .cookie-consent-visible {
+      padding-bottom: 8rem;
+    }
+  }
+
   /* Custom scrollbar — matches catalog/ink aesthetic */
   .drawer-scroll {
     scrollbar-width: thin;

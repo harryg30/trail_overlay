@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type { AddTrailTool, StagedSegment } from '@/lib/types'
 import type { TrailEditTool } from '@/lib/modes/types'
-import { polylineDistanceKm, haversineKm } from '@/lib/geo-utils'
+import { polylineDistanceKm, haversineKm, polylinesEqual } from '@/lib/geo-utils'
 import {
   insertPointAfter,
   removePointAt,
@@ -14,14 +14,6 @@ import {
 
 function genId() {
   return crypto.randomUUID()
-}
-
-function polylinesEqual(a: [number, number][], b: [number, number][]): boolean {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    if (a[i][0] !== b[i][0] || a[i][1] !== b[i][1]) return false
-  }
-  return true
 }
 
 function segmentsEqual(a: StagedSegment[], b: StagedSegment[]): boolean {
