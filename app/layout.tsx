@@ -37,7 +37,7 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} ${russoOne.variable} h-full antialiased`}
     >
-      <body className="h-full flex flex-col pb-48 sm:pb-32">
+      <body className="h-full flex flex-col">
         <ThemeProvider>
           {children}
           <CookieModal />

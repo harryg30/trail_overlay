@@ -16,20 +16,31 @@ export default function CookieModal({ forceOpen, onClose }: CookieModalProps) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
-    if (!forceOpen) {
+    const timer = window.setTimeout(() => {
+      setMounted(true);
+      if (forceOpen) {
+        setIsVisible(true);
+        return;
+      }
+
       const hasConsent = localStorage.getItem(COOKIE_CONSENT_KEY);
       if (!hasConsent) {
         setIsVisible(true);
       }
-    }
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [forceOpen]);
 
   useEffect(() => {
-    if (forceOpen) {
-      setIsVisible(true);
-    }
-  }, [forceOpen]);
+    if (!mounted) return;
+    document.body.classList.toggle("cookie-consent-visible", isVisible);
+    return () => {
+      document.body.classList.remove("cookie-consent-visible");
+    };
+  }, [isVisible, mounted]);
 
   function handleAccept() {
     localStorage.setItem(COOKIE_CONSENT_KEY, "accepted");
