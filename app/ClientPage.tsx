@@ -258,10 +258,6 @@ export default function ClientPage({
 
   const [officialMapLayer, setOfficialMapLayer] = useState<OfficialMapLayerPayload | null>(null)
   const [alignMapHandler, setAlignMapHandler] = useState<null | ((ll: [number, number]) => void)>(null)
-  const [pendingDigitizationTask, setPendingDigitizationTask] = useState<{
-    id: string
-    label: string
-  } | null>(null)
 
   useEffect(() => {
     if (editMode !== 'edit-network' && editMode !== 'add-trail') {
@@ -543,15 +539,6 @@ export default function ClientPage({
           }
         }
 
-        if (pendingDigitizationTask && data.savedTrails[0]) {
-          await fetch(`/api/digitization-tasks/${pendingDigitizationTask.id}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ completedTrailId: data.savedTrails[0].id }),
-          })
-          setPendingDigitizationTask(null)
-        }
-
         if (editingDraftLocalId) {
           setDraftTrails((prev) => {
             const next = prev.filter((d) => d.localId !== editingDraftLocalId)
@@ -574,7 +561,6 @@ export default function ClientPage({
       user,
       handleSaveDraft,
       networks,
-      pendingDigitizationTask,
       editingDraftLocalId,
       setMode,
     ]
@@ -1285,8 +1271,6 @@ export default function ClientPage({
           onFlyToNetwork={requestFlyToNetwork}
           onOfficialMapLayerChange={setOfficialMapLayer}
           onAlignmentMapPickChange={setAlignMapHandler}
-          pendingDigitizationTask={pendingDigitizationTask}
-          onPendingDigitizationTaskChange={setPendingDigitizationTask}
           viewingTrail={viewingTrail}
           onOpenViewTrail={handleOpenViewTrail}
           onCloseViewTrail={handleCloseViewTrail}

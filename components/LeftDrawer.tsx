@@ -93,8 +93,6 @@ interface LeftDrawerProps {
   onFlyToNetwork: (network: Network) => void
   onOfficialMapLayerChange: (layer: OfficialMapLayerPayload | null) => void
   onAlignmentMapPickChange: (handler: null | ((latlng: [number, number]) => void)) => void
-  pendingDigitizationTask: { id: string; label: string } | null
-  onPendingDigitizationTaskChange: (task: { id: string; label: string } | null) => void
   /** Trail currently being viewed in the detail panel (not editing). */
   viewingTrail: Trail | null
   onOpenViewTrail: (trail: Trail) => void
@@ -171,8 +169,6 @@ export default function LeftDrawer({
   onFlyToNetwork,
   onOfficialMapLayerChange,
   onAlignmentMapPickChange,
-  pendingDigitizationTask,
-  onPendingDigitizationTaskChange,
   viewingTrail,
   onOpenViewTrail,
   onCloseViewTrail,
@@ -437,8 +433,6 @@ export default function LeftDrawer({
           onFlyToNetwork={onFlyToNetwork}
           onOfficialMapLayerChange={onOfficialMapLayerChange}
           onAlignmentMapPickChange={onAlignmentMapPickChange}
-          pendingDigitizationTask={pendingDigitizationTask}
-          onPendingDigitizationTaskChange={onPendingDigitizationTaskChange}
           showOnMapOnly={showOnMapOnly}
           mapBounds={mapBounds}
         />

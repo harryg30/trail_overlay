@@ -131,12 +131,6 @@ export interface SaveTrailResponse {
   error?: string;
 }
 
-export type DigitizationTaskKind =
-  | "named_route"
-  | "intersection_route"
-  | "loop"
-  | "other";
-
 /** Persisted JSON from `buildMapOverlayTransform` (lib/map-overlay-transform). */
 export type MapOverlayTransformJson = {
   kind: "similarity_two_point";
@@ -170,20 +164,6 @@ export interface MapOverlayAlignmentPoint {
   imgY: number;
   lat: number;
   lon: number;
-}
-
-export interface NetworkDigitizationTask {
-  id: string;
-  networkId: string;
-  mapOverlayId?: string;
-  kind: DigitizationTaskKind;
-  label: string;
-  description?: string;
-  sortOrder: number;
-  completedTrailId?: string;
-  completedAt?: Date;
-  completedByUserId?: string;
-  createdAt: Date;
 }
 
 /** Client payload for rendering the georeferenced official map on Leaflet. */

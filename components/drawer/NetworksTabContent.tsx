@@ -27,8 +27,6 @@ interface NetworksTabContentProps {
   onFlyToNetwork: (network: Network) => void
   onOfficialMapLayerChange: (layer: OfficialMapLayerPayload | null) => void
   onAlignmentMapPickChange: (handler: null | ((latlng: [number, number]) => void)) => void
-  pendingDigitizationTask: { id: string; label: string } | null
-  onPendingDigitizationTaskChange: (task: { id: string; label: string } | null) => void
   showOnMapOnly: boolean
   mapBounds: MapBounds | null
 }
@@ -51,8 +49,6 @@ export function NetworksTabContent({
   onFlyToNetwork,
   onOfficialMapLayerChange,
   onAlignmentMapPickChange,
-  pendingDigitizationTask,
-  onPendingDigitizationTaskChange,
   showOnMapOnly,
   mapBounds,
 }: NetworksTabContentProps) {
@@ -112,8 +108,6 @@ export function NetworksTabContent({
           user={user}
           onOfficialMapLayerChange={onOfficialMapLayerChange}
           onAlignmentMapPickChange={onAlignmentMapPickChange}
-          pendingDigitizationTask={pendingDigitizationTask}
-          onPendingDigitizationTaskChange={onPendingDigitizationTaskChange}
         />
       )}
 
