@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server'
 import { cookies } from 'next/headers'
 import { queryOne } from '@/lib/db'
+import { verifyGoogleIdToken } from '@/lib/auth'
+import { getRequiredEnv } from '@/lib/env'
 import { encryptSession, SESSION_COOKIE_NAME, SESSION_COOKIE_OPTIONS } from '@/lib/session'
 
 interface GoogleTokenResponse {
@@ -12,33 +14,21 @@ interface GoogleTokenResponse {
   id_token: string
 }
 
-interface GoogleUserProfile {
-  sub: string
-  name: string
-  email: string
-  picture?: string
-  email_verified: boolean
-}
-
-/**
- * Parse and verify a Google ID token JWT (without verification, just parse for this simple case).
- * In production, you should verify the signature using Google's public keys.
- * For now, we do basic validation after confirming token exchange succeeded.
- */
-function parseIdToken(idToken: string): GoogleUserProfile | null {
-  try {
-    const parts = idToken.split('.')
-    if (parts.length !== 3) return null
-    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString())
-    return payload as GoogleUserProfile
-  } catch {
-    return null
-  }
-}
-
 export async function GET(request: NextRequest): Promise<Response> {
   const { searchParams } = request.nextUrl
   const cookieStore = await cookies()
+
+  let googleClientId: string
+  let googleClientSecret: string
+  let appUrl: string
+  try {
+    googleClientId = getRequiredEnv('GOOGLE_CLIENT_ID')
+    googleClientSecret = getRequiredEnv('GOOGLE_CLIENT_SECRET')
+    appUrl = getRequiredEnv('NEXT_PUBLIC_APP_URL')
+  } catch (err) {
+    console.error('Google callback config error:', err)
+    return Response.redirect(new URL('/?auth_error=config', request.url))
+  }
 
   if (searchParams.get('error')) {
     return Response.redirect(new URL('/?auth_error=denied', request.url))
@@ -64,11 +54,11 @@ export async function GET(request: NextRequest): Promise<Response> {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID!,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+        client_id: googleClientId,
+        client_secret: googleClientSecret,
         code,
         grant_type: 'authorization_code',
-        redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/google/callback`,
+        redirect_uri: `${appUrl}/api/auth/google/callback`,
       }),
     })
 
@@ -80,14 +70,14 @@ export async function GET(request: NextRequest): Promise<Response> {
     const tokenData: GoogleTokenResponse = await tokenRes.json()
     const { id_token } = tokenData
 
-    // Parse the ID token to extract user profile
-    const profile = parseIdToken(id_token)
+    // Verify signature + claims and extract user profile from ID token payload.
+    const profile = await verifyGoogleIdToken(id_token, googleClientId)
     if (!profile) {
-      console.error('Failed to parse Google ID token')
+      console.error('Failed to verify Google ID token')
       return Response.redirect(new URL('/?auth_error=invalid_token', request.url))
     }
 
-    if (!profile.email_verified) {
+    if (!profile.emailVerified) {
       console.error('Google account email not verified')
       return Response.redirect(new URL('/?auth_error=email_not_verified', request.url))
     }

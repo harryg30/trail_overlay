@@ -1,12 +1,23 @@
 import crypto from 'node:crypto'
+import { getRequiredEnv } from '@/lib/env'
 
 export async function GET(): Promise<Response> {
+  let clientId: string
+  let appUrl: string
+  try {
+    clientId = getRequiredEnv('GOOGLE_CLIENT_ID')
+    appUrl = getRequiredEnv('NEXT_PUBLIC_APP_URL')
+  } catch (err) {
+    console.error('Google OAuth config error:', err)
+    return new Response('Google auth is not configured', { status: 500 })
+  }
+
   // Generate a random state parameter for CSRF protection
   const state = crypto.randomBytes(32).toString('hex')
 
   const params = new URLSearchParams({
-    client_id: process.env.GOOGLE_CLIENT_ID!,
-    redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/google/callback`,
+    client_id: clientId,
+    redirect_uri: `${appUrl}/api/auth/google/callback`,
     response_type: 'code',
     scope: 'openid profile email',
     access_type: 'offline',

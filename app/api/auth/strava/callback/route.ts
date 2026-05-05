@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { cookies } from 'next/headers'
 import { queryOne } from '@/lib/db'
+import { getRequiredEnv } from '@/lib/env'
 import { encryptSession, SESSION_COOKIE_NAME, SESSION_COOKIE_OPTIONS } from '@/lib/session'
 
 interface StravaTokenResponse {
@@ -18,6 +19,16 @@ interface StravaTokenResponse {
 export async function GET(request: NextRequest): Promise<Response> {
   const { searchParams } = request.nextUrl
 
+  let stravaClientId: string
+  let stravaClientSecret: string
+  try {
+    stravaClientId = getRequiredEnv('STRAVA_CLIENT_ID')
+    stravaClientSecret = getRequiredEnv('STRAVA_CLIENT_SECRET')
+  } catch (err) {
+    console.error('Strava callback config error:', err)
+    return Response.redirect(new URL('/?auth_error=config', request.url))
+  }
+
   if (searchParams.get('error')) {
     return Response.redirect(new URL('/?auth_error=denied', request.url))
   }
@@ -33,8 +44,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        client_id: process.env.STRAVA_CLIENT_ID,
-        client_secret: process.env.STRAVA_CLIENT_SECRET,
+        client_id: stravaClientId,
+        client_secret: stravaClientSecret,
         code,
         grant_type: 'authorization_code',
       }),

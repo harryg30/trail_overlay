@@ -1,6 +1,18 @@
 import { cookies } from 'next/headers'
+import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { queryOne } from '@/lib/db'
 import { SESSION_COOKIE_NAME, decryptSession, AuthProvider } from '@/lib/session'
+
+const GOOGLE_JWKS = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'))
+const GOOGLE_ISSUERS = ['https://accounts.google.com', 'accounts.google.com']
+
+export interface GoogleIdTokenProfile {
+  sub: string
+  name: string
+  email: string
+  picture?: string
+  emailVerified: boolean
+}
 
 export interface SessionUser {
   id: string
@@ -15,6 +27,38 @@ export interface UserCapabilities {
   canCommentAssets: boolean // Any authenticated user
   canUploadGpx: boolean // Any authenticated user
   canUseStrava: boolean // Only Strava-authenticated users
+}
+
+export async function verifyGoogleIdToken(
+  idToken: string,
+  audience: string
+): Promise<GoogleIdTokenProfile | null> {
+  try {
+    const { payload } = await jwtVerify(idToken, GOOGLE_JWKS, {
+      issuer: GOOGLE_ISSUERS,
+      audience,
+    })
+
+    const sub = typeof payload.sub === 'string' ? payload.sub : null
+    const name = typeof payload.name === 'string' ? payload.name : null
+    const email = typeof payload.email === 'string' ? payload.email : null
+    const picture = typeof payload.picture === 'string' ? payload.picture : undefined
+    const emailVerified = payload.email_verified === true || payload.email_verified === 'true'
+
+    if (!sub || !name || !email) {
+      return null
+    }
+
+    return {
+      sub,
+      name,
+      email,
+      picture,
+      emailVerified,
+    }
+  } catch {
+    return null
+  }
 }
 
 /**
