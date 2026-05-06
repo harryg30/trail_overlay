@@ -778,6 +778,17 @@ export default function ClientPage({
     setSelectedActivityItem(item)
   }, [])
 
+  // When revision modal opens, switch left drawer to show edit form
+  useEffect(() => {
+    if (selectedActivityItem) {
+      const trail = trails.find(t => t.id === selectedActivityItem.trailId)
+      if (trail) {
+        setSelectedTrail(trail)
+        setMode('edit-trail')
+      }
+    }
+  }, [selectedActivityItem?.trailId, trails, setSelectedTrail, setMode])
+
   const handlePhotoOpen = useCallback((photoId: string) => {
     setPendingInitialPhotoId(null)  // consumed; prevent re-restore on subsequent opens
     updateParams({ photo: photoId })

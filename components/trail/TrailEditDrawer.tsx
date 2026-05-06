@@ -198,6 +198,37 @@ export function TrailEditDrawer({
         </div>
       )}
 
+      {variant === 'edit' && (
+        <div className="flex flex-col gap-2">
+          <p className="font-display text-xs font-normal uppercase tracking-[0.15em] text-muted-foreground">
+            Tools
+          </p>
+          <div className="flex flex-nowrap items-center gap-2 overflow-x-auto">
+            <button
+              type="button"
+              title="Snap to OSM"
+              aria-label="Snap to OSM tool"
+              aria-pressed={trailEditTool === 'snap'}
+              onClick={() => onSetTool('snap')}
+              className={`${toolBase} ${trailEditTool === 'snap' ? toolBtnActive : toolBtnIdle}`}
+            >
+              <FontAwesomeIcon icon={faMagnet} className="w-4 h-4" />
+            </button>
+            <button type="button" className={iconActionBtn} onClick={onUndo} disabled={!canUndo} title="Undo" aria-label="Undo">
+              <FontAwesomeIcon icon={faRotateLeft} className="w-4 h-4" />
+            </button>
+            <button type="button" className={iconActionBtn} onClick={onRedo} disabled={!canRedo} title="Redo" aria-label="Redo">
+              <FontAwesomeIcon icon={faRotateRight} className="w-4 h-4" />
+            </button>
+          </div>
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            {trailEditTool === 'snap'
+              ? 'Snap to OSM: drag endpoints to snap to nearest trail/road and auto-route along OSM ways.'
+              : 'Snap to OSM to adjust endpoints along OSM trails and roads.'}
+          </p>
+        </div>
+      )}
+
       <div>
         <p className="font-display mb-2 text-xs font-normal uppercase tracking-[0.15em] text-muted-foreground">
           Trail details

@@ -733,6 +733,19 @@ export default function LeafletMap({
     mapRef.current.flyToBounds(bounds, { padding: [40, 40], maxZoom: 15, duration: 1.2 })
   }, [trails]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Initialize snap anchor points from refined polyline when editing a trail with snap tool
+  useEffect(() => {
+    if (!mapRef.current) return
+
+    if (editTrailMode && trailEditTool === 'snap' && refinePolyline && refinePolyline.length > 0) {
+      // Set anchor points at start and end of the trail for routing between them
+      setSnapAnchorPoints([refinePolyline[0], refinePolyline[refinePolyline.length - 1]])
+    } else if (!editTrailMode || trailEditTool !== 'snap') {
+      // Clear anchor points when exiting edit mode or switching tools
+      setSnapAnchorPoints([])
+    }
+  }, [editTrailMode, trailEditTool, refinePolyline?.length])
+
   // Effect 3: rides layer
   useEffect(() => {
     if (!mapRef.current || !ridesLayerRef.current) return
