@@ -145,11 +145,15 @@ async function createTrailChunk(
     for (const trail of trails) {
       const wktLineString = `LINESTRING(${trail.polyline.map(([lat, lon]: [number, number]) => `${lon} ${lat}`).join(',')})`;
 
+      const osmWayIdNumeric = trail.osmWayId?.startsWith('way/')
+        ? parseInt(trail.osmWayId.slice(4), 10) || null
+        : null;
+
       const trailRow = await tx.queryOne<{ id: string }>(
         `INSERT INTO trails
          (name, difficulty, direction, polyline, distance_km, elevation_gain_ft,
-          notes, source, uploaded_by_user_id, geom)
-         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, ST_GeomFromText($10, 4326))
+          notes, source, osm_way_id, uploaded_by_user_id, geom)
+         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, ST_GeomFromText($11, 4326))
          RETURNING id`,
         [
           trail.name,
@@ -160,6 +164,7 @@ async function createTrailChunk(
           trail.elevationGainFt || 0,
           `OSM Way ID: ${trail.osmWayId}${trail.reasoning ? `\n\nAI Analysis: ${trail.reasoning}` : ''}`,
           'osm',
+          osmWayIdNumeric,
           userId,
           wktLineString,
         ]
