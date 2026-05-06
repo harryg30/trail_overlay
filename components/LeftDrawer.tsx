@@ -27,6 +27,7 @@ import { TrailDetailPanel } from '@/components/trail/TrailDetailPanel'
 import { ActivityFeed } from '@/components/ActivityFeed'
 import { TrailsTabContent } from '@/components/drawer/TrailsTabContent'
 import { NetworksTabContent } from '@/components/drawer/NetworksTabContent'
+import { ImportsTabContent, type ImportsTabContentHandle } from '@/components/drawer/ImportsTabContent'
 import { TrailPhotoActionModal } from '@/components/drawer/TrailPhotoActionModal'
 import type { StagedTrailApi } from '@/hooks/useStagedTrail'
 
@@ -39,6 +40,7 @@ interface LeftDrawerProps {
   onHideAllRides: () => void
   onRidesUploaded: (rides: Ride[]) => void
   onSyncComplete: () => Promise<void>
+  onTrailsChanged: () => Promise<void>
   editMode: EditMode
   onEditModeChange: (mode: EditMode) => void
   selectedTrail: Trail | null
@@ -100,12 +102,20 @@ interface LeftDrawerProps {
   onEditViewTrail: (trail: Trail) => void
   onSelectActivityItem?: (item: TrailActivityItem) => void
   /** Controlled tab (lifted to parent for URL sync). */
-  tab: 'trails' | 'activity' | 'networks'
-  onTabChange: (tab: 'trails' | 'activity' | 'networks') => void
+  tab: 'trails' | 'activity' | 'networks' | 'imports'
+  onTabChange: (tab: 'trails' | 'activity' | 'networks' | 'imports') => void
   /** Photo lightbox state for URL sync. */
   initialPhotoId?: string
   onPhotoOpen?: (photoId: string) => void
   onPhotoClose?: () => void
+  /** Draft trails from imports tab. */
+  onDraftTrailsChange?: (trails: any[], selectedIds: Set<string>) => void
+  onHoverImportTrail?: (osmWayId: string | null) => void
+  importsTabRef?: React.RefObject<ImportsTabContentHandle | null>
+  /** Bbox draw flow for OSM imports. */
+  onStartDrawBbox?: () => void
+  drawBboxCorners?: [number, number][]
+  onClearDrawBbox?: () => void
 }
 
 export default function LeftDrawer({
@@ -117,6 +127,7 @@ export default function LeftDrawer({
   onHideAllRides,
   onRidesUploaded,
   onSyncComplete,
+  onTrailsChanged,
   editMode,
   onEditModeChange,
   selectedTrail,
@@ -179,6 +190,12 @@ export default function LeftDrawer({
   initialPhotoId,
   onPhotoOpen,
   onPhotoClose,
+  onDraftTrailsChange,
+  onHoverImportTrail,
+  importsTabRef,
+  onStartDrawBbox,
+  drawBboxCorners,
+  onClearDrawBbox,
 }: LeftDrawerProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
@@ -333,7 +350,7 @@ export default function LeftDrawer({
 
       {/* Tab navigation */}
       <div className="flex border-b-2 border-border">
-        {(['trails', 'activity', 'networks'] as const).map((tab) => (
+        {(['trails', 'activity', 'networks', 'imports'] as const).map((tab) => (
           <button
             key={tab}
             type="button"
@@ -346,7 +363,8 @@ export default function LeftDrawer({
             )}
           >
             {tab === 'trails' ? 'Trails' :
-             tab === 'activity' ? 'Activity' : 'Networks'}
+             tab === 'activity' ? 'Activity' :
+             tab === 'networks' ? 'Networks' : 'Imports'}
           </button>
         ))}
       </div>
@@ -435,6 +453,21 @@ export default function LeftDrawer({
           onAlignmentMapPickChange={onAlignmentMapPickChange}
           showOnMapOnly={showOnMapOnly}
           mapBounds={mapBounds}
+        />
+      )}
+
+      {/* Imports tab */}
+      {!viewingTrail && drawerTab === 'imports' && (
+        <ImportsTabContent
+          ref={importsTabRef}
+          user={user}
+          mapBounds={mapBounds}
+          onApprovedImport={onTrailsChanged}
+          onDraftTrailsChange={onDraftTrailsChange}
+          onHoverImportTrail={onHoverImportTrail}
+          onStartDrawBbox={onStartDrawBbox}
+          drawBboxCorners={drawBboxCorners}
+          onClearDrawBbox={onClearDrawBbox}
         />
       )}
 

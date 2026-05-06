@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react'
 import type { Trail, TrailActivityItem } from '@/lib/types'
 
 export interface UseUrlParamSyncOptions {
-  drawerTab: 'trails' | 'activity' | 'networks'
+  drawerTab: 'trails' | 'activity' | 'networks' | 'imports'
   viewingTrail: Trail | null
   selectedActivityItem: TrailActivityItem | null
   /** Merge partial params into the URL without clobbering others. */

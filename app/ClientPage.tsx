@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import LeftDrawer from '@/components/LeftDrawer'
+import { type ImportsTabContentHandle } from '@/components/drawer/ImportsTabContent'
 import AnnouncementModal from '@/components/AnnouncementModal'
 import { ChangeDetailModal } from '@/components/trail/ChangeDetailModal'
 import { ANNOUNCEMENT_VERSION, ANNOUNCEMENT } from '@/lib/announcement'
@@ -88,8 +89,8 @@ export default function ClientPage({
   const searchParams = useSearchParams()
 
   // Lifted from LeftDrawer so we can sync to the URL
-  const [drawerTab, setDrawerTab] = useState<'trails' | 'activity' | 'networks'>(
-    (initialParams?.tab as 'trails' | 'activity' | 'networks' | undefined) ?? 'trails'
+  const [drawerTab, setDrawerTab] = useState<'trails' | 'activity' | 'networks' | 'imports'>(
+    (initialParams?.tab as 'trails' | 'activity' | 'networks' | 'imports' | undefined) ?? 'trails'
   )
 
   // Photo open from TrailDetailPanel lightbox; cleared after first use so it doesn't re-restore
@@ -113,6 +114,37 @@ export default function ClientPage({
   const [trails, setTrails] = useState<Trail[]>([])
   const [networks, setNetworks] = useState<Network[]>([])
   const [draftTrails, setDraftTrails] = useState<DraftTrail[]>([])
+  const [draftImportTrails, setDraftImportTrails] = useState<any[]>([])
+  const [draftImportSelectedIds, setDraftImportSelectedIds] = useState<Set<string>>(new Set())
+  const [hoveredImportTrailId, setHoveredImportTrailId] = useState<string | null>(null)
+  const [drawBboxMode, setDrawBboxMode] = useState(false)
+  const [drawBboxCorners, setDrawBboxCorners] = useState<[number, number][]>([])
+  const importsTabRef = useRef<ImportsTabContentHandle>(null)
+
+  const handleStartDrawBbox = useCallback(() => {
+    setDrawBboxCorners([])
+    setDrawBboxMode(true)
+  }, [])
+
+  const handleClearDrawBbox = useCallback(() => {
+    setDrawBboxCorners([])
+    setDrawBboxMode(false)
+  }, [])
+
+  const handleDraftImportTrailsChange = useCallback((trails: any[], selectedIds: Set<string>) => {
+    setDraftImportTrails(trails)
+    setDraftImportSelectedIds(selectedIds)
+  }, [])
+
+  const handleBboxDrawn = useCallback((corners: [[number, number], [number, number]]) => {
+    const [a, b] = corners
+    const south = Math.min(a[0], b[0])
+    const north = Math.max(a[0], b[0])
+    const west = Math.min(a[1], b[1])
+    const east = Math.max(a[1], b[1])
+    setDrawBboxCorners([[south, west], [north, east]])
+    setDrawBboxMode(false)
+  }, [])
   const [hiddenNetworkIds, setHiddenNetworkIds] = useState<Set<string>>(new Set())
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [showAnnouncement, setShowAnnouncement] = useState(false)
@@ -378,6 +410,28 @@ export default function ClientPage({
       .catch(console.error)
   }, [])
 
+  const reloadTrailMapObjects = useCallback(async () => {
+    try {
+      const [trailsRes, networksRes] = await Promise.all([
+        fetch('/api/trails'),
+        fetch('/api/networks'),
+      ])
+      const [trailsData, networksData] = await Promise.all([
+        trailsRes.json(),
+        networksRes.json(),
+      ])
+
+      if (trailsData.success && Array.isArray(trailsData.trails)) {
+        setTrails(trailsData.trails)
+      }
+      if (networksData.success && Array.isArray(networksData.networks)) {
+        setNetworks(networksData.networks)
+      }
+    } catch (err) {
+      console.error('Failed to reload trail map objects:', err)
+    }
+  }, [])
+
   const trimSegment = useMemo<TrimSegment | null>(() => {
     if (!trimStart || !trimEnd) return null
     const ride = rides.find((r) => r.id === trimStart.rideId)
@@ -549,6 +603,8 @@ export default function ClientPage({
           setDraftSidebarPrefill(null)
         }
 
+        await reloadTrailMapObjects()
+
         setMode(null)
         return null
       }
@@ -596,13 +652,14 @@ export default function ClientPage({
           persistDrafts(next)
           return next
         })
+        await reloadTrailMapObjects()
         return null
       }
       return data.error ?? 'Publish failed'
     } catch {
       return 'Network error'
     }
-  }, [draftTrails])
+  }, [draftTrails, reloadTrailMapObjects])
 
   const handleDeleteDraft = useCallback((localId: string) => {
     setDraftTrails((prev) => {
@@ -1281,6 +1338,13 @@ export default function ClientPage({
           initialPhotoId={pendingInitialPhotoId ?? undefined}
           onPhotoOpen={handlePhotoOpen}
           onPhotoClose={handlePhotoClose}
+          onDraftTrailsChange={handleDraftImportTrailsChange}
+          onHoverImportTrail={setHoveredImportTrailId}
+          importsTabRef={importsTabRef}
+          onStartDrawBbox={handleStartDrawBbox}
+          drawBboxCorners={drawBboxCorners}
+          onClearDrawBbox={handleClearDrawBbox}
+          onTrailsChanged={reloadTrailMapObjects}
         />
       </div>
 
@@ -1383,6 +1447,15 @@ export default function ClientPage({
         }
         initialZoom={initialParams?.zoom ?? undefined}
         skipInitialFit={initialParams?.lat != null && initialParams?.lng != null}
+        draftImportTrails={draftImportTrails}
+        draftImportSelectedIds={draftImportSelectedIds}
+        hoveredImportTrailId={hoveredImportTrailId}
+        onDraftImportTrailClick={(osmWayId) => {
+          importsTabRef.current?.toggleTrailSelection(osmWayId)
+        }}
+        drawBboxMode={drawBboxMode}
+        drawBboxCorners={drawBboxCorners}
+        onBboxDrawn={handleBboxDrawn}
       />
 
       {photoLightboxSrc && (
