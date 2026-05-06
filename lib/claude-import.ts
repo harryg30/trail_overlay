@@ -34,17 +34,21 @@ Your tasks:
 
 GROUPING HINTS:
 - Check endpoint proximity (start_lat/start_lon, end_lat/end_lon). Ways with aligned endpoints ~100m apart likely form one trail.
-- Ignore common suffixes ("Trail", "Path", "Road", "Way", "Loop", "Connector", etc.) when comparing names.
+- Ignore common suffixes ("Trail", "Path", "Road", "Way", "Loop", "Connector", "Circuit", "Route", "Drive", "Access") when comparing names.
 - Normalize: lowercase, strip diacritics, treat hyphens/apostrophes as spaces.
+- Join trails with name matches (e.g., "Porcupine Rim" + "Porcupine Rim Trail", "Slickrock" + "Slickrock Trail", "Arches Road" + "Arches scenic drive").
+- Join trails that differ only in numeric direction/number (e.g., "Fire Road A" + "Fire Road 1" = same trail if endpoints align).
+- Join minor spelling variations (e.g., "Sycamore" + "Sycamore Rim", "Moab" + "Moab Trail").
 - Consider network tags and operator tags — same operator often = related trails.
-- Don't over-group: "Fire Road A" and "Fire Road B" are different, but "Porcupine Rim" and "Porcupine Rim Trail" are the same.
+- Don't over-group: "Fire Road A" and "Fire Road B" are genuinely different trails. "East Trail" and "West Trail" are different.
 
 RANKING RULES:
-1. Only recommend real, maintained trails
-2. Exclude generic names ("Track", "Path", "Untitled") unless they have strong quality signals
-3. Prefer trails with clear difficulty ratings and good metadata
-4. Consider trail connectivity (trails in a network are more valuable)
-5. Flag suspicious trails (e.g. private roads mistagged as trails)
+1. REJECT any trail with bicycle=no (not bikeable)
+2. Only recommend real, maintained trails
+3. Exclude generic names ("Track", "Path", "Untitled") unless they have strong quality signals
+4. Prefer trails with clear difficulty ratings and good metadata
+5. Consider trail connectivity (trails in a network are more valuable)
+6. Flag suspicious trails (e.g. private roads mistagged as trails)
 
 DIFFICULTY MAPPING:
 - mtb:scale 0-1 → easy; 2 → intermediate; 3-4 → hard; 5-6 → pro
@@ -57,7 +61,7 @@ TYPE MAPPING:
 - bicycle + foot both yes → mixed
 
 QUALITY SIGNALS (raise score): well-formed name (not generic), official=yes, operator, network membership, clear difficulty tags, surface/width/trail_visibility, reasonable length.
-LOWER SIGNALS: unnamed/generic, missing tags, isolated, very short (<0.5km unless connector).`;
+LOWER SIGNALS: unnamed/generic, missing tags, isolated, very short (<0.5km unless connector), bicycle=no.`;
 
 const RELEVANT_TAGS = new Set([
   'name',
