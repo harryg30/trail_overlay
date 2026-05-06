@@ -6,42 +6,31 @@ import { bulkFindDuplicates } from '@/lib/spatial-dedup';
 import { rankOsmTrails } from '@/lib/claude-import';
 
 export async function POST(request: NextRequest) {
-  console.log('[Import OSM] Request received')
+  const userId = await getSessionUserId();
+  if (!userId) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
 
   try {
-    // 1. Check authentication
-    const userId = await getSessionUserId();
-    console.log('[Import OSM] User ID:', userId)
-
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // 2. Parse request
+    // Parse request
     const body = await request.json();
-    console.log('[Import OSM] Request body:', body)
-
     const { bbox, filters = {}, regionName = 'Unknown Region', instructions = '' } = body;
 
     if (!bbox || !Array.isArray(bbox) || bbox.length !== 4) {
       return NextResponse.json(
-        { error: 'Invalid bbox: expected [south, west, north, east]' },
+        { success: false, error: 'Invalid bbox: expected [south, west, north, east]' },
         { status: 400 }
       );
     }
 
     const [south, west, north, east] = bbox;
 
-    console.log('[Import OSM] Bbox:', { south, west, north, east })
-
-    // 3. Check rate limit (10/day, 100/month)
-    console.log('[Import OSM] Checking quota...')
+    // Check rate limit (10/day, 100/month)
     const quotaCheck = await checkImportQuota(userId);
-    console.log('[Import OSM] Quota check:', quotaCheck)
-
     if (!quotaCheck.allowed) {
       return NextResponse.json(
         {
+          success: false,
           error: 'Import quota exceeded',
           remaining: quotaCheck.remaining,
           resetAt: quotaCheck.resetAt,
@@ -50,11 +39,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 4. Create initial draft with "processing" status
+    // Create initial draft with "processing" status
     const draftResult = await query<any>(
       `INSERT INTO trail_import_drafts
        (user_id, bbox, filters, status, trails, stats, claude_prompt_tokens, claude_output_tokens, claude_cache_hit)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       VALUES ($1, $2::jsonb, $3::jsonb, $4, $5::jsonb, $6::jsonb, $7, $8, $9)
        RETURNING id, import_session_id`,
       [
         userId,
@@ -77,11 +66,11 @@ export async function POST(request: NextRequest) {
 
     const draft = draftResult[0];
 
-    // 5. Increment quota immediately
+    // Increment quota immediately
     await incrementImportQuota(userId);
 
-    // 6. Start background processing (don't await)
-    processImportInBackground(
+    // Start background processing using Vercel waitUntil
+    const waitUntilPromise = processImportInBackground(
       draft.id,
       userId,
       south,
@@ -95,6 +84,11 @@ export async function POST(request: NextRequest) {
       console.error('[Import OSM] Background processing error:', err);
     });
 
+    // Use waitUntil if available (Vercel Functions), otherwise just let it run
+    if ('waitUntil' in request) {
+      (request as any).waitUntil(waitUntilPromise);
+    }
+
     // Return immediately with processing draft
     return NextResponse.json({
       success: true,
@@ -107,8 +101,8 @@ export async function POST(request: NextRequest) {
     console.error('[Import OSM] Error:', error);
     return NextResponse.json(
       {
+        success: false,
         error: error.message || 'Failed to import trails',
-        details: error.message,
       },
       { status: 500 }
     );
@@ -127,17 +121,14 @@ async function processImportInBackground(
   filters: any
 ) {
   try {
-    console.log('[Import OSM BG] Starting background import for draft:', draftId);
-
-    // Fetch OSM data from Overpass (via internal API proxy)
-    console.log('[Import OSM] Fetching from Overpass...')
-
-    // Use relative URL for internal API calls to work in both dev and prod
-    const baseUrl = process.env.NODE_ENV === 'production'
-      ? process.env.NEXT_PUBLIC_APP_URL
-      : 'http://localhost:3000'
-
-    console.log('[Import OSM] Using base URL:', baseUrl)
+    // Derive baseUrl from environment, with validation
+    let baseUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
+    if (!baseUrl) {
+      baseUrl = process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : 'http://localhost:3000';
+    }
+    baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
 
     const osmResponse = await fetch(
       `${baseUrl}/api/osm?south=${south}&west=${west}&north=${north}&east=${east}&filters=path,track,cycleway`,
@@ -146,8 +137,6 @@ async function processImportInBackground(
         headers: { 'Content-Type': 'application/json' },
       }
     );
-
-    console.log('[Import OSM] Overpass response status:', osmResponse.status)
 
     if (!osmResponse.ok) {
       const errorData = await osmResponse.json().catch(() => ({}));
@@ -158,8 +147,6 @@ async function processImportInBackground(
     const osmData = await osmResponse.json();
     const osmElements = osmData.elements || [];
 
-    console.log('[Import OSM] Sample element:', JSON.stringify(osmElements[0], null, 2));
-
     // Build node index for geometry construction
     const nodeIndex = new Map<number, { lat: number; lon: number }>();
     for (const el of osmElements) {
@@ -168,14 +155,8 @@ async function processImportInBackground(
       }
     }
 
-    console.log('[Import OSM] Indexed', nodeIndex.size, 'nodes');
-
     // 5. Server-side filtering (surface, access)
     const filteredTrails = filterOsmTrails(osmElements, filters);
-
-    console.log(
-      `[Import] Fetched ${osmElements.length} OSM elements, filtered to ${filteredTrails.length} trails`
-    );
 
     // 6. Convert OSM elements to polylines and prepare for deduplication
     const trailsWithPolylines = filteredTrails
@@ -193,10 +174,6 @@ async function processImportInBackground(
       })
       .filter((t) => t !== null);
 
-    console.log(
-      `[Import OSM] Built ${trailsWithPolylines.length} trails with polylines from ${filteredTrails.length} filtered trails`
-    );
-
     // 7. PostGIS spatial deduplication
     const duplicateMap = await bulkFindDuplicates(trailsWithPolylines, {
       north,
@@ -208,10 +185,6 @@ async function processImportInBackground(
     // Filter out trails that have duplicates within 50m
     const newTrails = trailsWithPolylines.filter(
       (t) => !duplicateMap.has(t.osmWayId)
-    );
-
-    console.log(
-      `[Import] After dedup: ${newTrails.length} new trails (${duplicateMap.size} duplicates removed)`
     );
 
     // 8. Get existing trails summary for Claude context
@@ -233,16 +206,11 @@ async function processImportInBackground(
         : 'No existing trails in this area';
 
     // 9. Call Claude API to rank trails
-    console.log('[Import OSM] Calling Claude API with', newTrails.length, 'trails...')
     const { results: claudeResults, usage } = await rankOsmTrails(
       newTrails,
       existingTrailsSummary,
       regionName,
       instructions
-    );
-
-    console.log(
-      `[Import OSM] Claude ranked ${claudeResults.rankedTrails.length} trails (${usage.inputTokens} input, ${usage.outputTokens} output, cache hit: ${usage.cacheHit})`
     );
 
     // 10. Merge Claude results with original trail data (to get polyline and distanceKm)
@@ -253,7 +221,6 @@ async function processImportInBackground(
     const enrichedTrails = claudeResults.rankedTrails.map((claudeTrail) => {
       const originalTrail = trailDataMap.get(claudeTrail.osmWayId);
       if (!originalTrail) {
-        console.warn(`[Import] Claude returned unknown trail: ${claudeTrail.osmWayId}`);
         return claudeTrail;
       }
 
@@ -267,7 +234,7 @@ async function processImportInBackground(
     // 11. Update draft with results
     await query(
       `UPDATE trail_import_drafts
-       SET status = $1, trails = $2, stats = $3, claude_prompt_tokens = $4, claude_output_tokens = $5, claude_cache_hit = $6
+       SET status = $1, trails = $2::jsonb, stats = $3::jsonb, claude_prompt_tokens = $4, claude_output_tokens = $5, claude_cache_hit = $6
        WHERE id = $7`,
       [
         'pending',
@@ -285,8 +252,6 @@ async function processImportInBackground(
         draftId,
       ]
     );
-
-    console.log('[Import OSM BG] Import complete for draft:', draftId);
   } catch (error: any) {
     console.error('[Import OSM BG] Background error:', error);
     await markDraftFailed(draftId, error.message || 'Import failed');
@@ -329,8 +294,8 @@ function filterOsmTrails(elements: any[], filters: any): any[] {
       return false;
     }
 
-    // Filter by access (exclude private unless permissive)
-    if (tags.access === 'private' && tags.access !== 'permissive') {
+    // Filter by access: allow yes/permissive/designated, exclude private and other restricted values
+    if (tags.access && tags.access !== 'yes' && tags.access !== 'permissive' && tags.access !== 'designated') {
       return false;
     }
 

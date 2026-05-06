@@ -6,12 +6,12 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  try {
-    const userId = await getSessionUserId();
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  const userId = await getSessionUserId();
+  if (!userId) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
 
+  try {
     const { id } = await params;
     const { selectedTrailIds } = await request.json();
 
@@ -149,7 +149,7 @@ async function createTrailChunk(
         `INSERT INTO trails
          (name, difficulty, direction, polyline, distance_km, elevation_gain_ft,
           notes, source, uploaded_by_user_id, geom)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, ST_GeomFromText($10, 4326))
+         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, ST_GeomFromText($10, 4326))
          RETURNING id`,
         [
           trail.name,
@@ -175,7 +175,7 @@ async function createTrailChunk(
         `INSERT INTO trail_revisions
          (trail_id, created_by_user_id, change_set_id, import_session_id,
           ai_categorized, action, payload)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
         [
           trailId,
           userId,
@@ -185,10 +185,13 @@ async function createTrailChunk(
           'create',
           JSON.stringify({
             name: trail.name,
-            difficulty: trail.difficulty,
+            difficulty: trail.difficulty || 'not_set',
+            direction: trail.direction || 'not_set',
+            polyline: trail.polyline,
+            distanceKm: trail.distanceKm || 0,
+            elevationGainFt: trail.elevationGainFt || 0,
             source: 'osm',
             osmWayId: trail.osmWayId,
-            claudeScore: trail.score,
           }),
         ]
       );

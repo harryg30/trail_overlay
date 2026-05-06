@@ -3,12 +3,12 @@ import { getSessionUserId } from '@/lib/auth';
 import { query } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
-  try {
-    const userId = await getSessionUserId();
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  const userId = await getSessionUserId();
+  if (!userId) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
 
+  try {
     const { searchParams } = request.nextUrl;
     const status = searchParams.get('status') || 'pending';
 
@@ -55,13 +55,14 @@ export async function GET(request: NextRequest) {
     }));
 
     return NextResponse.json({
+      success: true,
       drafts,
       count: drafts.length,
     });
   } catch (error: any) {
     console.error('[Import Drafts] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch import drafts' },
+      { success: false, error: 'Failed to fetch import drafts' },
       { status: 500 }
     );
   }

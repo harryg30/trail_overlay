@@ -59,8 +59,6 @@ TYPE MAPPING:
 QUALITY SIGNALS (raise score): well-formed name (not generic), official=yes, operator, network membership, clear difficulty tags, surface/width/trail_visibility, reasonable length.
 LOWER SIGNALS: unnamed/generic, missing tags, isolated, very short (<0.5km unless connector).`;
 
-// Tags Claude uses for ranking / typing. Anything else (massgis:way_id,
-// attribution, source, note, …) is dropped before sending to keep tokens low.
 const RELEVANT_TAGS = new Set([
   'name',
   'highway',
@@ -87,8 +85,6 @@ function pickRelevantTags(tags: Record<string, any> | undefined): Record<string,
   }
   return out;
 }
-
-const TOUCHING_THRESHOLD_KM = 0.1; // 100 m
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371;
@@ -149,14 +145,20 @@ export async function rankOsmTrails(
       ],
     });
 
-    // Extract JSON from response
-    const content = response.content[0];
-    if (content.type !== 'text') {
-      throw new Error('Unexpected response type from Claude');
+    // Extract JSON from response - handle multiple text blocks
+    let jsonText = '';
+    for (const block of response.content) {
+      if (block.type === 'text') {
+        jsonText += block.text;
+      }
+    }
+
+    if (!jsonText) {
+      throw new Error('No text content in Claude response');
     }
 
     // Strip markdown code fence if present
-    let jsonText = content.text.trim();
+    jsonText = jsonText.trim();
     if (jsonText.startsWith('```json')) {
       jsonText = jsonText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
     } else if (jsonText.startsWith('```')) {

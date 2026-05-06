@@ -1,4 +1,4 @@
--- migrations/016_spatial_indexes.sql
+-- migrations/018_spatial_indexes.sql
 
 -- Enable PostGIS (may already be enabled)
 CREATE EXTENSION IF NOT EXISTS postgis;
@@ -17,8 +17,9 @@ SET geom = ST_GeomFromText(
     SELECT string_agg(
       (point->1)::text || ' ' || (point->0)::text,
       ','
+      ORDER BY ordinality
     )
-    FROM jsonb_array_elements(polyline) AS point
+    FROM jsonb_array_elements(polyline) WITH ORDINALITY as point
   ) || ')',
   4326
 )

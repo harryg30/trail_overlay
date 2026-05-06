@@ -17,12 +17,15 @@ export async function checkImportQuota(
 ): Promise<RateLimitResult> {
   const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
   const dailyKey = `import:quota:${userId}:${today}`;
-  const monthlyKey = `import:quota:${userId}:monthly`;
+
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const monthlyKey = `import:quota:${userId}:${currentMonth}`;
 
   // Check daily limit (10/day)
   const dailyCount = (await redis.get<number>(dailyKey)) || 0;
   if (dailyCount >= 10) {
-    const tomorrow = new Date();
+    const tomorrow = new Date(now);
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(0, 0, 0, 0);
 
@@ -36,7 +39,7 @@ export async function checkImportQuota(
   // Check monthly limit (100/month)
   const monthlyCount = (await redis.get<number>(monthlyKey)) || 0;
   if (monthlyCount >= 100) {
-    const nextMonth = new Date();
+    const nextMonth = new Date(now);
     nextMonth.setMonth(nextMonth.getMonth() + 1);
     nextMonth.setDate(1);
     nextMonth.setHours(0, 0, 0, 0);
@@ -48,25 +51,41 @@ export async function checkImportQuota(
     };
   }
 
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 0, 0, 0);
+
   return {
     allowed: true,
     remaining: 10 - dailyCount,
-    resetAt: new Date(Date.now() + 86400000), // +24h
+    resetAt: tomorrow,
   };
 }
 
 export async function incrementImportQuota(userId: string): Promise<void> {
   const today = new Date().toISOString().split('T')[0];
   const dailyKey = `import:quota:${userId}:${today}`;
-  const monthlyKey = `import:quota:${userId}:monthly`;
 
-  // Increment daily (with 24h TTL)
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const monthlyKey = `import:quota:${userId}:${currentMonth}`;
+
+  // Increment daily (expire at next midnight)
   await redis.incr(dailyKey);
-  await redis.expire(dailyKey, 86400); // 24 hours
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 0, 0, 0);
+  const secondsUntilMidnight = Math.floor((tomorrow.getTime() - now.getTime()) / 1000);
+  await redis.expire(dailyKey, secondsUntilMidnight + 60); // +60s buffer
 
-  // Increment monthly (with 30d TTL)
+  // Increment monthly (expire at first of next month)
   await redis.incr(monthlyKey);
-  await redis.expire(monthlyKey, 2592000); // 30 days
+  const nextMonth = new Date(now);
+  nextMonth.setMonth(nextMonth.getMonth() + 1);
+  nextMonth.setDate(1);
+  nextMonth.setHours(0, 0, 0, 0);
+  const secondsUntilNextMonth = Math.floor((nextMonth.getTime() - now.getTime()) / 1000);
+  await redis.expire(monthlyKey, secondsUntilNextMonth + 60); // +60s buffer
 }
 
 export async function getCachedOverpassResult(

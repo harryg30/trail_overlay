@@ -44,8 +44,6 @@ function buildOverpassQuery(
 }
 
 async function fetchOverpass(key: string, query: string): Promise<unknown> {
-  console.log('[OSM Proxy] Sending query to Overpass:', query.substring(0, 200))
-
   const res = await fetch(OVERPASS_ENDPOINT, {
     method: 'POST',
     body: `data=${encodeURIComponent(query)}`,
@@ -56,10 +54,7 @@ async function fetchOverpass(key: string, query: string): Promise<unknown> {
     },
   })
 
-  console.log('[OSM Proxy] Overpass response:', res.status, res.statusText)
-
   const text = await res.text()
-  console.log('[OSM Proxy] Overpass response body:', text.substring(0, 500))
 
   if (!res.ok) {
     const code = classifyOverpassFailure(res.status, text)

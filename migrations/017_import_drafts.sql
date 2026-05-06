@@ -1,4 +1,4 @@
--- migrations/015_import_drafts.sql
+-- migrations/017_import_drafts.sql
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -23,9 +23,9 @@ CREATE TABLE trail_import_drafts (
   created_change_set_id UUID REFERENCES trail_change_sets(id),
 
   -- Timestamps
-  created_at TIMESTAMP DEFAULT NOW(),
-  approved_at TIMESTAMP,
-  published_at TIMESTAMP,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  approved_at TIMESTAMPTZ,
+  published_at TIMESTAMPTZ,
 
   -- Claude metadata (for debugging)
   claude_prompt_tokens INT,

@@ -100,19 +100,21 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
     if (!hasProcessing) return
 
     const interval = setInterval(() => {
-      fetchDrafts()
+      fetchDrafts(true) // Pass true to skip loading toggle
     }, 2000) // Poll every 2 seconds
 
     return () => clearInterval(interval)
   }, [drafts])
 
   useEffect(() => {
-    console.log('[Import] mapBounds updated:', mapBounds)
-  }, [mapBounds])
-
-  useEffect(() => {
-    console.log('[Import] showImportForm changed:', showImportForm)
-  }, [showImportForm])
+    // Clear selectedTrailIds when expanding a different draft
+    if (expandedDraftId !== null) {
+      const currentDraft = drafts.find((d) => d.id === expandedDraftId)
+      if (currentDraft) {
+        setSelectedTrailIds(new Set())
+      }
+    }
+  }, [expandedDraftId, drafts])
 
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
@@ -134,29 +136,28 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
     }
   }, [expandedDraftId, selectedTrailIds, drafts, dismissedByDraft, onDraftTrailsChange])
 
-  async function fetchDrafts() {
-    try {
-      console.log('[Drafts] Fetching drafts...')
+  async function fetchDrafts(skipLoading = false) {
+    if (!skipLoading) {
       setLoading(true)
-      setError(null)
+    }
+    setError(null)
 
+    try {
       const response = await fetch('/api/trails/import-drafts?status=pending')
-      console.log('[Drafts] Response status:', response.status)
 
       if (!response.ok) {
         throw new Error('Failed to fetch import drafts')
       }
 
       const data = await response.json()
-      console.log('[Drafts] Received data:', data)
-
       setDrafts(data.drafts || [])
-      console.log('[Drafts] Set', data.drafts?.length || 0, 'drafts')
     } catch (err: any) {
       console.error('[Drafts] Error:', err)
       setError(err.message)
     } finally {
-      setLoading(false)
+      if (!skipLoading) {
+        setLoading(false)
+      }
     }
   }
 
@@ -345,15 +346,11 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
   }
 
   async function handleImportFromMapView() {
-    console.log('[Import] Button clicked!', { mapBounds, importing })
-
     if (!mapBounds) {
-      console.log('[Import] No map bounds available')
       alert('Unable to get map bounds. Try zooming to the area you want to import.')
       return
     }
 
-    console.log('[Import] Showing form...')
     setShowImportForm(true)
   }
 
@@ -373,17 +370,13 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
       // Use current map bounds
       bbox = [mapBounds.south, mapBounds.west, mapBounds.north, mapBounds.east]
     } else {
-      console.log('[Import] Missing requirements:', { mapBounds, drawBboxCorners })
       alert('Please draw an area on the map or zoom to the area you want to import')
       return
     }
 
     if (!regionName.trim()) {
-      console.log('[Import] Missing region name')
       return
     }
-
-    console.log('[Import] Starting import...', { bbox, regionName })
 
     try {
       setImporting(true)
@@ -396,8 +389,6 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
         message: 'Fetching trails from OpenStreetMap',
         detail: 'Querying Overpass API...',
       })
-
-      console.log('[Import] Calling API with bbox:', bbox)
 
       // Simulate progress updates based on expected timing
       const progressTimer1 = setTimeout(() => {
@@ -425,11 +416,8 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
       clearTimeout(progressTimer1)
       clearTimeout(progressTimer2)
 
-      console.log('[Import] API response status:', response.status)
-
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        console.error('[Import] API error:', errorData)
         const claudePrefix = errorData.source === 'claude' ? 'Claude: ' : ''
         const msg =
           errorData.claudeMessage ||
@@ -445,13 +433,10 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
         detail: 'Creating draft for review...',
       })
 
-      const result = await response.json()
-      console.log('[Import] API success:', result)
+      await response.json()
 
       // Refresh drafts
-      console.log('[Import] Refreshing drafts...')
       await fetchDrafts()
-      console.log('[Import] Import complete!')
 
       // Reset form
       setRegionName('')

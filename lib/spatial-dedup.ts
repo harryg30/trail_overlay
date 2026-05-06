@@ -32,18 +32,24 @@ export async function findDuplicateTrails(
     SELECT
       t.id::text as trail_id,
       t.name as trail_name,
-      ST_HausdorffDistance(
-        ST_Transform(t.geom, 3857),
-        ST_Transform(ST_GeomFromText($1, 4326), 3857)
-      ) as distance_meters
-    FROM trails t
-    WHERE
-      t.geom && ST_GeomFromText($2, 4326) -- spatial index filter
-      AND ST_HausdorffDistance(
-        ST_Transform(t.geom, 3857),
-        ST_Transform(ST_GeomFromText($1, 4326), 3857)
-      ) < $3
-    ORDER BY distance_meters ASC
+      dist as distance_meters
+    FROM (
+      SELECT
+        t.id,
+        t.name,
+        ST_HausdorffDistance(
+          ST_Transform(t.geom, 3857),
+          ST_Transform(ST_GeomFromText($1, 4326), 3857)
+        ) as dist
+      FROM trails t
+      WHERE
+        t.geom && ST_GeomFromText($2, 4326)
+        AND ST_HausdorffDistance(
+          ST_Transform(t.geom, 3857),
+          ST_Transform(ST_GeomFromText($1, 4326), 3857)
+        ) < $3
+    ) sub
+    ORDER BY dist ASC
     LIMIT 5
   `;
 

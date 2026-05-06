@@ -58,6 +58,18 @@ import {
   type MapBaseStyle,
 } from '@/lib/map-basemap'
 
+function escapeHtml(text: string | undefined): string {
+  if (!text) return ''
+  const map: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }
+  return text.replace(/[&<>"']/g, (char) => map[char])
+}
+
 export interface LeafletMapProps {
   rides: Ride[]
   hiddenRideIds: Set<string>
@@ -744,7 +756,7 @@ export default function LeafletMap({
       // Clear anchor points when exiting edit mode or switching tools
       setSnapAnchorPoints([])
     }
-  }, [editTrailMode, trailEditTool, refinePolyline?.length])
+  }, [editTrailMode, trailEditTool, refinePolyline])
 
   // Effect 3: rides layer
   useEffect(() => {
@@ -956,13 +968,13 @@ export default function LeafletMap({
       const weight = isHovered ? 6 : isSelected ? 4 : 2
       const opacity = isHovered ? 1 : isSelected ? 1 : 0.6
 
-      // Build tooltip content
+      // Build tooltip content with escaped values
       const difficultyLabel = trail.difficulty ? trail.difficulty.replace('_', ' ') : 'not set'
       const distanceStr = trail.distanceKm != null ? `${trail.distanceKm.toFixed(1)} km` : '? km'
       const scoreStr = trail.score != null ? `${trail.score}/100` : '?'
       const tooltipContent = `
         <div style="min-width: 200px;">
-          <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">${trail.name}</div>
+          <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">${escapeHtml(trail.name)}</div>
           <div style="font-size: 12px; color: #666; margin-bottom: 2px;">
             <span style="text-transform: capitalize;">${difficultyLabel}</span> ·
             <span style="text-transform: capitalize;">${trail.type || 'mixed'}</span> ·
@@ -971,7 +983,7 @@ export default function LeafletMap({
           <div style="font-size: 12px; color: #666; margin-bottom: 6px;">
             Quality score: ${scoreStr}
           </div>
-          ${trail.reasoning ? `<div style="font-size: 11px; font-style: italic; color: #888; margin-top: 4px; border-top: 1px solid #eee; padding-top: 4px;">${trail.reasoning}</div>` : ''}
+          ${trail.reasoning ? `<div style="font-size: 11px; font-style: italic; color: #888; margin-top: 4px; border-top: 1px solid #eee; padding-top: 4px;">${escapeHtml(trail.reasoning)}</div>` : ''}
           <div style="font-size: 11px; color: #999; margin-top: 6px; padding-top: 4px; border-top: 1px solid #eee;">
             ${isSelected ? '✓ Selected' : 'Click to select'}
           </div>
@@ -1539,7 +1551,7 @@ export default function LeafletMap({
         interactive: false,
         ...catalogLineHints,
       })
-        .bindTooltip(`Draft: ${draft.name}`, { sticky: true })
+        .bindTooltip(`Draft: ${escapeHtml(draft.name)}`, { sticky: true })
         .addTo(draftTrailsLayerRef.current!)
     })
   }, [draftTrails])
