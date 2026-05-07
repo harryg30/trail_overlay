@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUserId } from '@/lib/auth';
 import { query } from '@/lib/db';
-import { checkImportQuota, incrementImportQuota } from '@/lib/rate-limit';
 import { bulkFindDuplicates } from '@/lib/spatial-dedup';
-import { rankOsmTrails } from '@/lib/claude-import';
 
 export async function POST(request: NextRequest) {
   const userId = await getSessionUserId();
@@ -14,7 +12,7 @@ export async function POST(request: NextRequest) {
   try {
     // Parse request
     const body = await request.json();
-    const { bbox, filters = {}, regionName = 'Unknown Region', instructions = '' } = body;
+    const { bbox, filters = {}, regionName, suggestionSetName, instructions = '' } = body;
 
     if (!bbox || !Array.isArray(bbox) || bbox.length !== 4) {
       return NextResponse.json(
@@ -25,25 +23,11 @@ export async function POST(request: NextRequest) {
 
     const [south, west, north, east] = bbox;
 
-    // Check rate limit (10/day, 100/month)
-    const quotaCheck = await checkImportQuota(userId);
-    if (!quotaCheck.allowed) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'Import quota exceeded',
-          remaining: quotaCheck.remaining,
-          resetAt: quotaCheck.resetAt,
-        },
-        { status: 429 }
-      );
-    }
-
     // Create initial draft with "processing" status
     const draftResult = await query<any>(
       `INSERT INTO trail_import_drafts
-       (user_id, bbox, filters, status, trails, stats, claude_prompt_tokens, claude_output_tokens, claude_cache_hit)
-       VALUES ($1, $2::jsonb, $3::jsonb, $4, $5::jsonb, $6::jsonb, $7, $8, $9)
+       (user_id, bbox, filters, status, trails, stats, suggestion_set_name, ai_analyzed, claude_prompt_tokens, claude_output_tokens, claude_cache_hit)
+       VALUES ($1, $2::jsonb, $3::jsonb, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11)
        RETURNING id, import_session_id`,
       [
         userId,
@@ -58,6 +42,8 @@ export async function POST(request: NextRequest) {
           duplicates: 0,
           recommended: 0,
         }),
+        (body.suggestionSetName || body.regionName || 'Unnamed').trim(),
+        false,
         0,
         0,
         false,
@@ -65,9 +51,6 @@ export async function POST(request: NextRequest) {
     );
 
     const draft = draftResult[0];
-
-    // Increment quota immediately
-    await incrementImportQuota(userId);
 
     // Start background processing using Vercel waitUntil
     const waitUntilPromise = processImportInBackground(
@@ -78,7 +61,6 @@ export async function POST(request: NextRequest) {
       north,
       east,
       regionName,
-      instructions,
       filters
     ).catch((err) => {
       console.error('[Import OSM] Background processing error:', err);
@@ -95,7 +77,6 @@ export async function POST(request: NextRequest) {
       draftId: draft.id,
       importSessionId: draft.import_session_id,
       status: 'processing',
-      quotaRemaining: quotaCheck.remaining - 1,
     });
   } catch (error: any) {
     console.error('[Import OSM] Error:', error);
@@ -117,29 +98,41 @@ async function processImportInBackground(
   north: number,
   east: number,
   regionName: string,
-  instructions: string,
   filters: any
 ) {
+  console.log('[Import OSM BG] Starting background processing for draft:', draftId)
+  console.log('[Import OSM BG] Bbox:', { south, west, north, east })
+
   try {
     // Derive baseUrl from environment, with validation
-    let baseUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
-    if (!baseUrl) {
-      baseUrl = process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : 'http://localhost:3000';
-    }
+    // In development, always use localhost even if NEXT_PUBLIC_APP_URL is set
+    let baseUrl = process.env.NODE_ENV === 'development'
+      ? 'http://localhost:3000'
+      : (process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+         (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'));
+
     baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
 
-    const osmResponse = await fetch(
-      `${baseUrl}/api/osm?south=${south}&west=${west}&north=${north}&east=${east}&filters=path,track,cycleway`,
-      {
+    const osmUrl = `${baseUrl}/api/osm?south=${south}&west=${west}&north=${north}&east=${east}&filters=path,track,cycleway`;
+    console.log('[Import OSM BG] Calling OSM endpoint:', osmUrl)
+
+    let osmResponse;
+    try {
+      osmResponse = await fetch(osmUrl, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
-      }
-    );
+      });
+    } catch (fetchErr) {
+      console.error('[Import OSM BG] Fetch error:', fetchErr)
+      await markDraftFailed(draftId, `Failed to fetch from OSM endpoint: ${fetchErr instanceof Error ? fetchErr.message : 'unknown error'}`);
+      return;
+    }
+
+    console.log('[Import OSM BG] OSM API response status:', osmResponse.status)
 
     if (!osmResponse.ok) {
       const errorData = await osmResponse.json().catch(() => ({}));
+      console.error('[Import OSM BG] OSM API error:', errorData)
       await markDraftFailed(draftId, errorData.error || 'Failed to fetch trails from OpenStreetMap');
       return;
     }
@@ -155,10 +148,10 @@ async function processImportInBackground(
       }
     }
 
-    // 5. Server-side filtering (surface, access)
+    // Server-side filtering (surface, access)
     const filteredTrails = filterOsmTrails(osmElements, filters);
 
-    // 6. Convert OSM elements to polylines and prepare for deduplication
+    // Convert OSM elements to polylines and prepare for deduplication
     const trailsWithPolylines = filteredTrails
       .map((el) => {
         const polyline = extractPolyline(el, nodeIndex);
@@ -170,11 +163,15 @@ async function processImportInBackground(
           polyline,
           tags: el.tags || {},
           distanceKm: calculateDistance(polyline),
+          difficulty: 'not_set' as const,
+          type: 'mixed' as const,
+          score: 0,
+          reasoning: 'Not yet analyzed by Claude AI',
         };
       })
       .filter((t) => t !== null);
 
-    // 7. PostGIS spatial deduplication
+    // PostGIS spatial deduplication
     const duplicateMap = await bulkFindDuplicates(trailsWithPolylines, {
       north,
       south,
@@ -187,68 +184,21 @@ async function processImportInBackground(
       (t) => !duplicateMap.has(t.osmWayId)
     );
 
-    // 8. Get existing trails summary for Claude context
-    const existingTrails = await query<any>(
-      `SELECT name, difficulty FROM trails
-       WHERE ST_Intersects(
-         geom,
-         ST_MakeEnvelope($1, $2, $3, $4, 4326)
-       )
-       LIMIT 50`,
-      [west, south, east, north]
-    );
-
-    const existingTrailsSummary =
-      existingTrails.length > 0
-        ? existingTrails
-            .map((t) => `${t.name} (${t.difficulty})`)
-            .join(', ')
-        : 'No existing trails in this area';
-
-    // 9. Call Claude API to rank trails
-    const { results: claudeResults, usage } = await rankOsmTrails(
-      newTrails,
-      existingTrailsSummary,
-      regionName,
-      instructions
-    );
-
-    // 10. Merge Claude results with original trail data (to get polyline and distanceKm)
-    const trailDataMap = new Map(
-      newTrails.map((t) => [t.osmWayId, t])
-    );
-
-    const enrichedTrails = claudeResults.rankedTrails.map((claudeTrail) => {
-      const originalTrail = trailDataMap.get(claudeTrail.osmWayId);
-      if (!originalTrail) {
-        return claudeTrail;
-      }
-
-      return {
-        ...claudeTrail,
-        polyline: originalTrail.polyline,
-        distanceKm: originalTrail.distanceKm,
-      };
-    });
-
-    // 11. Update draft with results
+    // Update draft with raw trails (no Claude analysis yet)
     await query(
       `UPDATE trail_import_drafts
-       SET status = $1, trails = $2::jsonb, stats = $3::jsonb, claude_prompt_tokens = $4, claude_output_tokens = $5, claude_cache_hit = $6
-       WHERE id = $7`,
+       SET status = $1, trails = $2::jsonb, stats = $3::jsonb
+       WHERE id = $4`,
       [
         'pending',
-        JSON.stringify(enrichedTrails),
+        JSON.stringify(newTrails),
         JSON.stringify({
           totalFound: osmElements.length,
           filtered: filteredTrails.length,
           newTrails: newTrails.length,
           duplicates: duplicateMap.size,
-          recommended: enrichedTrails.length,
+          recommended: newTrails.length,
         }),
-        usage.inputTokens,
-        usage.outputTokens,
-        usage.cacheHit,
         draftId,
       ]
     );

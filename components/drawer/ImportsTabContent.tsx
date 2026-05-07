@@ -1,9 +1,9 @@
 'use client'
 
 import { useState, useEffect, useImperativeHandle, forwardRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import type { SessionUser } from '@/lib/auth'
-import type { MapBounds } from '@/lib/geo-utils'
 
 interface ImportDraft {
   id: string
@@ -23,6 +23,9 @@ interface ImportDraft {
   createdAt: string
   approvedAt?: string
   publishedAt?: string
+  suggestionSetName?: string
+  aiAnalyzed: boolean
+  aiAnalyzedAt?: string
   claudeUsage: {
     promptTokens: number
     outputTokens: number
@@ -43,7 +46,6 @@ interface ImportedTrail {
 
 interface ImportsTabContentProps {
   user: SessionUser | null
-  mapBounds: MapBounds | null
   onApprovedImport?: () => Promise<void>
   onDraftTrailsChange?: (trails: ImportedTrail[], selectedIds: Set<string>) => void
   onHoverImportTrail?: (osmWayId: string | null) => void
@@ -63,7 +65,7 @@ function getActivityLabel(type: ImportedTrail['type']): string {
 }
 
 export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabContentProps>(
-  function ImportsTabContent({ user, mapBounds, onApprovedImport, onDraftTrailsChange, onHoverImportTrail, onStartDrawBbox, drawBboxCorners, onClearDrawBbox }, ref) {
+  function ImportsTabContent({ user, onApprovedImport, onDraftTrailsChange, onHoverImportTrail, onStartDrawBbox, drawBboxCorners, onClearDrawBbox }, ref) {
   const [drafts, setDrafts] = useState<ImportDraft[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -81,9 +83,11 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
     message: string
     detail?: string
   } | null>(null)
-  const [showImportForm, setShowImportForm] = useState(false)
-  const [regionName, setRegionName] = useState('')
-  const [instructions, setInstructions] = useState('')
+  const [suggestionSetName, setSuggestionSetName] = useState('')
+  const [analyzingDraftId, setAnalyzingDraftId] = useState<string | null>(null)
+  const [expandGenerateForm, setExpandGenerateForm] = useState(true)
+  const [analyzeFormDraftId, setAnalyzeFormDraftId] = useState<string | null>(null)
+  const [analyzeInstructions, setAnalyzeInstructions] = useState('')
 
   useEffect(() => {
     if (!user) {
@@ -143,7 +147,7 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
     setError(null)
 
     try {
-      const response = await fetch('/api/trails/import-drafts?status=pending')
+      const response = await fetch('/api/trails/import-drafts?status=all')
 
       if (!response.ok) {
         throw new Error('Failed to fetch import drafts')
@@ -303,6 +307,33 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
     setEditForm(null)
   }
 
+  async function analyzeWithClaude(draftId: string) {
+    try {
+      setAnalyzingDraftId(draftId)
+      const response = await fetch(`/api/trails/import-drafts/${draftId}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instructions: analyzeInstructions.trim(),
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Analysis failed (${response.status})`)
+      }
+
+      // Refresh drafts to show updated trails
+      await fetchDrafts()
+      setAnalyzeFormDraftId(null)
+      setAnalyzeInstructions('')
+    } catch (err: any) {
+      alert(`Analysis failed: ${err.message}`)
+    } finally {
+      setAnalyzingDraftId(null)
+    }
+  }
+
   async function saveEditTrail(draftId: string) {
     if (!editingTrailId || !editForm) return
     setSavingEdit(true)
@@ -345,43 +376,26 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
     }
   }
 
-  async function handleImportFromMapView() {
-    if (!mapBounds) {
-      alert('Unable to get map bounds. Try zooming to the area you want to import.')
-      return
-    }
-
-    setShowImportForm(true)
-  }
-
   async function submitImport() {
-    // Compute bbox from drawn corners or current map bounds
-    let bbox: number[]
-
-    if (drawBboxCorners && drawBboxCorners.length === 2) {
-      // Use drawn bbox
-      const [corner1, corner2] = drawBboxCorners
-      const south = Math.min(corner1[0], corner2[0])
-      const north = Math.max(corner1[0], corner2[0])
-      const west = Math.min(corner1[1], corner2[1])
-      const east = Math.max(corner1[1], corner2[1])
-      bbox = [south, west, north, east]
-    } else if (mapBounds) {
-      // Use current map bounds
-      bbox = [mapBounds.south, mapBounds.west, mapBounds.north, mapBounds.east]
-    } else {
-      alert('Please draw an area on the map or zoom to the area you want to import')
+    if (!drawBboxCorners || drawBboxCorners.length !== 2) {
+      alert('Please draw an area on the map before generating suggestions')
       return
     }
 
-    if (!regionName.trim()) {
+    const [corner1, corner2] = drawBboxCorners
+    const south = Math.min(corner1[0], corner2[0])
+    const north = Math.max(corner1[0], corner2[0])
+    const west = Math.min(corner1[1], corner2[1])
+    const east = Math.max(corner1[1], corner2[1])
+    const bbox = [south, west, north, east]
+
+    if (!suggestionSetName.trim()) {
       return
     }
 
     try {
       setImporting(true)
       setError(null)
-      setShowImportForm(false)
 
       // Step 1: Fetching from OpenStreetMap
       setImportProgress({
@@ -399,22 +413,13 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
         })
       }, 3000)
 
-      const progressTimer2 = setTimeout(() => {
-        setImportProgress({
-          step: 3,
-          message: 'Analyzing with Claude AI',
-          detail: 'Ranking trails by quality and relevance...',
-        })
-      }, 6000)
-
       const response = await fetch('/api/trails/import-osm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bbox, regionName: regionName.trim(), instructions: instructions.trim() }),
+        body: JSON.stringify({ bbox, suggestionSetName: suggestionSetName.trim() }),
       })
 
       clearTimeout(progressTimer1)
-      clearTimeout(progressTimer2)
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
@@ -428,7 +433,7 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
       }
 
       setImportProgress({
-        step: 4,
+        step: 3,
         message: 'Finalizing import',
         detail: 'Creating draft for review...',
       })
@@ -439,17 +444,16 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
       await fetchDrafts()
 
       // Reset form
-      setRegionName('')
-      setInstructions('')
+      setSuggestionSetName('')
       if (onClearDrawBbox) {
         onClearDrawBbox()
       }
 
       // Show success message briefly before clearing
       setImportProgress({
-        step: 5,
+        step: 4,
         message: 'Import complete!',
-        detail: `Draft created. Processing started.`,
+        detail: `Draft created. Ready for analysis.`,
       })
 
       setTimeout(() => {
@@ -473,6 +477,75 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
     )
   }
 
+  const loadingModal = importing && (
+    <div className="fixed inset-0 flex items-center justify-center bg-black/50" style={{ zIndex: 99999 }}>
+      <div className="rounded-lg bg-card p-6 shadow-lg max-w-md w-full mx-4">
+        <div className="space-y-4">
+          {/* Progress steps */}
+          <div className="space-y-3">
+            {[
+              { num: 1, label: 'Fetching from OpenStreetMap' },
+              { num: 2, label: 'Filtering and deduplicating' },
+              { num: 3, label: 'Finalizing import' },
+            ].map((step) => (
+              <div key={step.num} className="flex items-center gap-3">
+                <div
+                  className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${
+                    importProgress && importProgress.step === step.num
+                      ? 'bg-primary text-primary-foreground'
+                      : importProgress && importProgress.step > step.num
+                      ? 'bg-primary/20 text-primary'
+                      : 'bg-muted text-muted-foreground'
+                  }`}
+                >
+                  {importProgress && importProgress.step > step.num ? (
+                    <span>✓</span>
+                  ) : importProgress && importProgress.step === step.num ? (
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"></div>
+                  ) : (
+                    step.num
+                  )}
+                </div>
+                <div className="flex-1">
+                  <div
+                    className={`text-sm font-medium ${
+                      importProgress && importProgress.step >= step.num
+                        ? 'text-foreground'
+                        : 'text-muted-foreground'
+                    }`}
+                  >
+                    {step.label}
+                  </div>
+                  {importProgress &&
+                    importProgress.step === step.num &&
+                    importProgress.detail && (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {importProgress.detail}
+                      </div>
+                    )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Overall message */}
+          {importProgress && importProgress.step === 5 && (
+            <div className="rounded-md bg-primary/10 p-3 text-center">
+              <div className="font-semibold text-primary">
+                {importProgress.message}
+              </div>
+              {importProgress.detail && (
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {importProgress.detail}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+
   if (loading) {
     return (
       <div className="p-4 text-center text-muted-foreground">
@@ -488,7 +561,7 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
           <p className="font-medium">Error loading drafts</p>
           <p className="mt-1">{error}</p>
         </div>
-        <Button onClick={fetchDrafts} className="mt-3 w-full" variant="outline">
+        <Button onClick={() => { void fetchDrafts() }} className="mt-3 w-full" variant="outline">
           Retry
         </Button>
       </div>
@@ -497,276 +570,200 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
 
   if (drafts.length === 0) {
     return (
-      <div className="p-4">
-        {!showImportForm ? (
-          <>
-            <div className="flex gap-2">
-              <Button
-                onClick={() => {
-                  if (onStartDrawBbox) {
-                    onStartDrawBbox()
-                  }
-                }}
-                disabled={importing}
-                className="flex-1"
-                variant="outline"
-              >
-                Draw Area
-              </Button>
-              <Button
-                onClick={handleImportFromMapView}
-                disabled={importing || !mapBounds}
-                className="flex-1"
-              >
-                Current View
-              </Button>
+      <>
+        <div className="p-4 space-y-4 flex flex-col">
+          {/* Generate Suggestions Form - Always Visible */}
+          <div className="space-y-4 rounded-lg border border-border bg-card">
+          {/* Collapsible Header */}
+          <button
+            onClick={() => setExpandGenerateForm(!expandGenerateForm)}
+            className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
+          >
+            <div className="flex items-center gap-3 flex-1 text-left">
+              <div className="text-base font-semibold">Generate Suggestions from OSM</div>
+              <div className="text-xs text-muted-foreground">
+                {expandGenerateForm ? '▼' : '▶'}
+              </div>
             </div>
+          </button>
 
-            {drawBboxCorners && drawBboxCorners.length === 2 && (
-              <div className="mt-3 rounded-md bg-muted p-2 text-xs">
-                <div className="font-medium mb-1">Drawn Area</div>
-                <div className="text-muted-foreground">
-                  {Math.abs(drawBboxCorners[1][0] - drawBboxCorners[0][0]).toFixed(4)}° × {Math.abs(drawBboxCorners[1][1] - drawBboxCorners[0][1]).toFixed(4)}°
+          {/* Collapsible Content */}
+          {expandGenerateForm && (
+            <div className="space-y-4 px-4 pb-4 border-t border-border">
+              <p className="text-sm text-muted-foreground">
+                Create a new suggestion set from OpenStreetMap data in your current map view
+              </p>
+
+              <div>
+                <label htmlFor="osm-name" className="block text-sm font-medium">
+                  Suggestion Set Name
+                </label>
+                <input
+                  id="osm-name"
+                  type="text"
+                  value={suggestionSetName}
+                  onChange={(e) => setSuggestionSetName(e.target.value)}
+                  placeholder="e.g., Moab, Utah"
+                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && suggestionSetName.trim() && drawBboxCorners?.length === 2) {
+                      submitImport()
+                    }
+                  }}
+                  autoFocus
+                />
+              </div>
+
+              {!drawBboxCorners || drawBboxCorners.length !== 2 ? (
+                <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 p-3 space-y-2">
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Draw an area on the map to generate suggestions
+                  </p>
+                  <Button
+                    onClick={() => {
+                      if (onStartDrawBbox) {
+                        onStartDrawBbox()
+                      }
+                    }}
+                    size="sm"
+                    className="w-full"
+                  >
+                    Draw Area
+                  </Button>
                 </div>
+              ) : (
+                <div className="rounded-md bg-muted p-3 text-xs">
+                  <div className="font-medium mb-1">Map Area Ready</div>
+                  <div className="text-muted-foreground">
+                    {Math.abs(drawBboxCorners[1][0] - drawBboxCorners[0][0]).toFixed(4)}° × {Math.abs(drawBboxCorners[1][1] - drawBboxCorners[0][1]).toFixed(4)}°
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-2">
                 <Button
                   onClick={() => {
-                    setShowImportForm(true)
+                    setSuggestionSetName('')
                   }}
-                  className="w-full mt-2"
-                  size="sm"
+                  variant="outline"
+                  className="flex-1"
                 >
-                  Import This Area
+                  Clear
+                </Button>
+                <Button
+                  onClick={submitImport}
+                  disabled={!suggestionSetName.trim() || importing || !drawBboxCorners || drawBboxCorners.length !== 2}
+                  className="flex-1"
+                >
+                  {importing ? 'Importing...' : 'Import'}
                 </Button>
               </div>
-            )}
-
-            {!mapBounds && !drawBboxCorners && (
-              <p className="mt-2 text-xs text-muted-foreground text-center">
-                Draw an area or zoom the map to import trails
-              </p>
-            )}
-
-            <div className="mt-6 text-center text-muted-foreground">
-              <p className="text-sm">No pending imports</p>
-              <p className="mt-2 text-xs">Use the button above to import trails from OpenStreetMap</p>
             </div>
-          </>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-lg font-semibold">Import Trails from OSM</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Claude AI will analyze trails in the current map view
-              </p>
-            </div>
+          )}
+        </div>
 
-            <div>
-              <label htmlFor="region-name" className="block text-sm font-medium">
-                Region Name
-              </label>
-              <input
-                id="region-name"
-                type="text"
-                value={regionName}
-                onChange={(e) => setRegionName(e.target.value)}
-                placeholder="e.g., Moab, Utah"
-                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && regionName.trim()) {
-                    submitImport()
-                  }
-                }}
-                autoFocus
-              />
-            </div>
-
-            {mapBounds && (
-              <div className="rounded-md bg-muted p-3 text-xs">
-                <div className="font-medium mb-1">Map Area</div>
-                <div className="text-muted-foreground space-y-0.5">
-                  <div>N: {mapBounds.north.toFixed(4)}, S: {mapBounds.south.toFixed(4)}</div>
-                  <div>E: {mapBounds.east.toFixed(4)}, W: {mapBounds.west.toFixed(4)}</div>
-                </div>
-              </div>
-            )}
-
-            <div>
-              <label htmlFor="instructions" className="block text-sm font-medium">
-                Additional Instructions (optional)
-              </label>
-              <textarea
-                id="instructions"
-                value={instructions}
-                onChange={(e) => setInstructions(e.target.value)}
-                placeholder="e.g., Prefer shuttle/downhill trails, exclude hiking-only paths, prioritize loop trails..."
-                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                rows={3}
-              />
-            </div>
-
-            {mapBounds && (
-              <div className="rounded-md bg-muted p-3 text-xs">
-                <div className="font-medium mb-1">Map Area</div>
-                <div className="text-muted-foreground space-y-0.5">
-                  <div>N: {mapBounds.north.toFixed(4)}, S: {mapBounds.south.toFixed(4)}</div>
-                  <div>E: {mapBounds.east.toFixed(4)}, W: {mapBounds.west.toFixed(4)}</div>
-                </div>
-              </div>
-            )}
-
-            <div className="flex gap-2">
-              <Button
-                onClick={() => {
-                  setShowImportForm(false)
-                  setRegionName('')
-                  setInstructions('')
-                }}
-                variant="outline"
-                className="flex-1"
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={submitImport}
-                disabled={!regionName.trim() || importing}
-                className="flex-1"
-              >
-                {importing ? 'Importing...' : 'Import'}
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Loading Overlay */}
-        {importing && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="rounded-lg bg-card p-6 shadow-lg max-w-md w-full mx-4">
-              <div className="space-y-4">
-                {/* Progress steps */}
-                <div className="space-y-3">
-                  {[
-                    { num: 1, label: 'Fetching from OpenStreetMap' },
-                    { num: 2, label: 'Filtering and deduplicating' },
-                    { num: 3, label: 'Analyzing with Claude AI' },
-                    { num: 4, label: 'Finalizing import' },
-                  ].map((step) => (
-                    <div key={step.num} className="flex items-center gap-3">
-                      <div
-                        className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${
-                          importProgress && importProgress.step === step.num
-                            ? 'bg-primary text-primary-foreground'
-                            : importProgress && importProgress.step > step.num
-                            ? 'bg-primary/20 text-primary'
-                            : 'bg-muted text-muted-foreground'
-                        }`}
-                      >
-                        {importProgress && importProgress.step > step.num ? (
-                          <span>✓</span>
-                        ) : importProgress && importProgress.step === step.num ? (
-                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"></div>
-                        ) : (
-                          step.num
-                        )}
-                      </div>
-                      <div className="flex-1">
-                        <div
-                          className={`text-sm font-medium ${
-                            importProgress && importProgress.step >= step.num
-                              ? 'text-foreground'
-                              : 'text-muted-foreground'
-                          }`}
-                        >
-                          {step.label}
-                        </div>
-                        {importProgress &&
-                          importProgress.step === step.num &&
-                          importProgress.detail && (
-                            <div className="mt-1 text-xs text-muted-foreground">
-                              {importProgress.detail}
-                            </div>
-                          )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Overall message */}
-                {importProgress && importProgress.step === 5 && (
-                  <div className="rounded-md bg-primary/10 p-3 text-center">
-                    <div className="font-semibold text-primary">
-                      {importProgress.message}
-                    </div>
-                    {importProgress.detail && (
-                      <div className="mt-1 text-sm text-muted-foreground">
-                        {importProgress.detail}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+        <div className="text-center text-muted-foreground">
+          <p className="text-sm">No pending imports</p>
+        </div>
       </div>
-    )
+
+      {/* Loading Modal via Portal */}
+      {typeof document !== 'undefined' && loadingModal && createPortal(loadingModal, document.body)}
+    </>
+  )
   }
 
   const expandedDraft = expandedDraftId ? drafts.find((d) => d.id === expandedDraftId) : null
 
   return (
-    <div className={`flex flex-col gap-3 p-4 ${expandedDraft ? 'h-full' : ''}`}>
+    <div className={`flex flex-col gap-2 p-4 ${expandedDraft ? 'h-full' : ''}`}>
       {!expandedDraft && (
-      <div className="flex gap-2">
-        <Button
-          onClick={() => {
-            if (onStartDrawBbox) {
-              onStartDrawBbox()
-            }
-          }}
-          disabled={importing}
-          className="flex-1"
-          variant="outline"
-        >
-          Draw Area
-        </Button>
-        <Button
-          onClick={handleImportFromMapView}
-          disabled={importing || !mapBounds}
-          className="flex-1"
-          variant="outline"
-        >
-          Current View
-        </Button>
-      </div>
-      )}
-
-      {!expandedDraft && drawBboxCorners && drawBboxCorners.length === 2 && (
-        <div className="rounded-md bg-muted p-2 text-xs">
-          <div className="flex justify-between items-start">
-            <div>
-              <div className="font-medium mb-1">Drawn Area</div>
-              <div className="text-muted-foreground">
-                {Math.abs(drawBboxCorners[1][0] - drawBboxCorners[0][0]).toFixed(4)}° × {Math.abs(drawBboxCorners[1][1] - drawBboxCorners[0][1]).toFixed(4)}°
+        <div className="space-y-4 rounded-lg border border-border bg-card">
+          {/* Collapsible Header */}
+          <button
+            onClick={() => setExpandGenerateForm(!expandGenerateForm)}
+            className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
+          >
+            <div className="flex items-center gap-3 flex-1 text-left">
+              <div className="text-base font-semibold">Generate Suggestions from OSM</div>
+              <div className="text-xs text-muted-foreground">
+                {expandGenerateForm ? '▼' : '▶'}
               </div>
             </div>
-            {onClearDrawBbox && (
-              <Button
-                onClick={onClearDrawBbox}
-                size="sm"
-                variant="ghost"
-                className="h-6 px-2 text-xs"
-              >
-                Clear
-              </Button>
-            )}
-          </div>
-          <Button
-            onClick={() => setShowImportForm(true)}
-            className="w-full mt-2"
-            size="sm"
-          >
-            Import This Area
-          </Button>
+          </button>
+
+          {/* Collapsible Content */}
+          {expandGenerateForm && (
+            <div className="space-y-4 px-4 pb-4 border-t border-border">
+              <p className="text-sm text-muted-foreground">
+                Create a new suggestion set from OpenStreetMap data in your current map view
+              </p>
+
+              <div>
+                <label htmlFor="drafts-name" className="block text-sm font-medium">
+                  Suggestion Set Name
+                </label>
+                <input
+                  id="drafts-name"
+                  type="text"
+                  value={suggestionSetName}
+                  onChange={(e) => setSuggestionSetName(e.target.value)}
+                  placeholder="e.g., Moab, Utah"
+                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && suggestionSetName.trim() && drawBboxCorners?.length === 2) {
+                      submitImport()
+                    }
+                  }}
+                />
+              </div>
+
+              {!drawBboxCorners || drawBboxCorners.length !== 2 ? (
+                <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 p-3 space-y-2">
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Draw an area on the map to generate suggestions
+                  </p>
+                  <Button
+                    onClick={() => {
+                      if (onStartDrawBbox) {
+                        onStartDrawBbox()
+                      }
+                    }}
+                    size="sm"
+                    className="w-full"
+                  >
+                    Draw Area
+                  </Button>
+                </div>
+              ) : (
+                <div className="rounded-md bg-muted p-3 text-xs">
+                  <div className="font-medium mb-1">Map Area Ready</div>
+                  <div className="text-muted-foreground">
+                    {Math.abs(drawBboxCorners[1][0] - drawBboxCorners[0][0]).toFixed(4)}° × {Math.abs(drawBboxCorners[1][1] - drawBboxCorners[0][1]).toFixed(4)}°
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => {
+                    setSuggestionSetName('')
+                  }}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  Clear
+                </Button>
+                <Button
+                  onClick={submitImport}
+                  disabled={!suggestionSetName.trim() || importing || !drawBboxCorners || drawBboxCorners.length !== 2}
+                  className="flex-1"
+                >
+                  {importing ? 'Importing...' : 'Import'}
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -779,7 +776,7 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
       {(expandedDraft ? [expandedDraft] : drafts).map((draft) => (
         <div
           key={draft.id}
-          className={`rounded-lg border border-border bg-card p-3 text-sm ${expandedDraftId === draft.id ? 'flex-1 min-h-0 flex flex-col' : ''}`}
+          className={`rounded-lg border border-border bg-card p-2 text-sm ${expandedDraftId === draft.id ? 'flex-1 min-h-0 flex flex-col' : ''}`}
         >
           {/* Draft header */}
           <div className="flex items-start justify-between gap-2">
@@ -796,6 +793,8 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
                     {draft.status !== 'processing' && draft.status !== 'failed' && `${draft.stats.recommended} trails found`}
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
+                    {draft.suggestionSetName && <span className="font-medium">{draft.suggestionSetName}</span>}
+                    {draft.suggestionSetName && <span> · </span>}
                     {new Date(draft.createdAt).toLocaleDateString()}
                   </div>
                 </div>
@@ -816,16 +815,6 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
                 </div>
               )}
             </button>
-
-            <Button
-              onClick={() => handleDeleteDraft(draft.id)}
-              disabled={deleting === draft.id}
-              size="sm"
-              variant="ghost"
-              className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
-            >
-              {deleting === draft.id ? '...' : '×'}
-            </Button>
           </div>
 
           {/* Expanded view */}
@@ -886,6 +875,106 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
                       Restore
                     </Button>
                   </div>
+                </div>
+              )}
+
+              {/* Analyze button for unanalyzed drafts */}
+              {!draft.aiAnalyzed && (
+                <div className="mb-3">
+                  {analyzeFormDraftId === draft.id ? (
+                    <div className="space-y-2 rounded border border-border bg-muted/30 p-3">
+                      <textarea
+                        value={analyzeInstructions}
+                        onChange={(e) => setAnalyzeInstructions(e.target.value)}
+                        placeholder="Optional instructions for Claude AI analysis..."
+                        className="w-full rounded border border-input bg-background px-2 py-2 text-xs"
+                        rows={2}
+                      />
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={() => {
+                            setAnalyzeFormDraftId(null)
+                            setAnalyzeInstructions('')
+                          }}
+                          disabled={analyzingDraftId === draft.id}
+                          size="sm"
+                          variant="outline"
+                          className="flex-1"
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={() => analyzeWithClaude(draft.id)}
+                          disabled={analyzingDraftId === draft.id}
+                          size="sm"
+                          className="flex-1"
+                        >
+                          {analyzingDraftId === draft.id ? 'Analyzing...' : 'Analyze'}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Button
+                      onClick={() => setAnalyzeFormDraftId(draft.id)}
+                      disabled={analyzingDraftId === draft.id}
+                      size="sm"
+                      className="w-full"
+                    >
+                      {analyzingDraftId === draft.id ? 'Analyzing...' : 'Analyze with Claude AI'}
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              {/* Claude AI summary for analyzed drafts */}
+              {draft.aiAnalyzed && (
+                <div className="mb-3 rounded bg-muted/50 p-2 text-xs text-muted-foreground space-y-1">
+                  <div className="font-medium text-foreground">✓ Claude Analysis Complete</div>
+                  <div>Claude ranked {draft.trails?.length || 0} trails by quality, removed duplicates, and tagged difficulty/type.</div>
+                  <div className="flex gap-2 mt-2">
+                    <Button
+                      onClick={() => setAnalyzeFormDraftId(draft.id)}
+                      disabled={analyzingDraftId === draft.id}
+                      size="sm"
+                      variant="outline"
+                      className="flex-1"
+                    >
+                      {analyzingDraftId === draft.id ? 'Recomputing...' : 'Recompute'}
+                    </Button>
+                  </div>
+                  {analyzeFormDraftId === draft.id && (
+                    <div className="space-y-2 rounded border border-border bg-background p-2 mt-2">
+                      <textarea
+                        value={analyzeInstructions}
+                        onChange={(e) => setAnalyzeInstructions(e.target.value)}
+                        placeholder="Optional instructions to refine analysis..."
+                        className="w-full rounded border border-input bg-background px-2 py-2 text-xs"
+                        rows={2}
+                      />
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={() => {
+                            setAnalyzeFormDraftId(null)
+                            setAnalyzeInstructions('')
+                          }}
+                          disabled={analyzingDraftId === draft.id}
+                          size="sm"
+                          variant="outline"
+                          className="flex-1"
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={() => analyzeWithClaude(draft.id)}
+                          disabled={analyzingDraftId === draft.id}
+                          size="sm"
+                          className="flex-1"
+                        >
+                          {analyzingDraftId === draft.id ? 'Recomputing...' : 'Recompute'}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1050,15 +1139,27 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
               </Button>
 
               {/* Claude usage info */}
-              <div className="mt-3 rounded bg-muted/50 p-2 text-xs text-muted-foreground">
-                <div className="flex justify-between">
-                  <span>AI tokens:</span>
-                  <span>
-                    {draft.claudeUsage.promptTokens + draft.claudeUsage.outputTokens} total
-                    {draft.claudeUsage.cacheHit && ' (cached)'}
-                  </span>
+              {draft.aiAnalyzed && (
+                <div className="mt-3 rounded bg-muted/50 p-2 text-xs text-muted-foreground">
+                  <div className="flex justify-between">
+                    <span>AI tokens:</span>
+                    <span>
+                      {draft.claudeUsage.promptTokens + draft.claudeUsage.outputTokens} total
+                      {draft.claudeUsage.cacheHit && ' (cached)'}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* Delete button */}
+              <Button
+                onClick={() => handleDeleteDraft(draft.id)}
+                disabled={deleting === draft.id}
+                variant="outline"
+                className="mt-3 w-full text-destructive hover:bg-destructive/10"
+              >
+                {deleting === draft.id ? 'Deleting...' : 'Delete Suggestion Set'}
+              </Button>
                 </>
               )}
             </div>
@@ -1066,153 +1167,8 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
         </div>
       ))}
 
-      {/* Import Form */}
-      {showImportForm && (
-        <div className="space-y-4 rounded-lg border border-border bg-card p-4">
-          <div>
-            <h3 className="text-base font-semibold">Import from OSM</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Claude AI will analyze trails in the current map view
-            </p>
-          </div>
-
-          <div>
-            <label htmlFor="region-name-2" className="block text-sm font-medium">
-              Region Name
-            </label>
-            <input
-              id="region-name-2"
-              type="text"
-              value={regionName}
-              onChange={(e) => setRegionName(e.target.value)}
-              placeholder="e.g., Moab, Utah"
-              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && regionName.trim()) {
-                  submitImport()
-                }
-              }}
-              autoFocus
-            />
-          </div>
-
-          {mapBounds && (
-            <div className="rounded-md bg-muted p-2 text-xs">
-              <div className="font-medium mb-1">Map Area</div>
-              <div className="text-muted-foreground space-y-0.5">
-                <div>N: {mapBounds.north.toFixed(4)}, S: {mapBounds.south.toFixed(4)}</div>
-                <div>E: {mapBounds.east.toFixed(4)}, W: {mapBounds.west.toFixed(4)}</div>
-              </div>
-            </div>
-          )}
-
-          <div>
-            <label htmlFor="instructions-2" className="block text-sm font-medium">
-              Additional Instructions (optional)
-            </label>
-            <textarea
-              id="instructions-2"
-              value={instructions}
-              onChange={(e) => setInstructions(e.target.value)}
-              placeholder="e.g., Prefer shuttle/downhill trails, exclude hiking-only paths, prioritize loop trails..."
-              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              rows={3}
-            />
-          </div>
-
-          <div className="flex gap-2">
-            <Button
-              onClick={() => {
-                setShowImportForm(false)
-                setRegionName('')
-                setInstructions('')
-              }}
-              variant="outline"
-              className="flex-1"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={submitImport}
-              disabled={!regionName.trim() || importing}
-              className="flex-1"
-            >
-              {importing ? 'Importing...' : 'Import'}
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Loading Overlay */}
-      {importing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="rounded-lg bg-card p-6 shadow-lg max-w-md w-full mx-4">
-            <div className="space-y-4">
-              {/* Progress steps */}
-              <div className="space-y-3">
-                {[
-                  { num: 1, label: 'Fetching from OpenStreetMap' },
-                  { num: 2, label: 'Filtering and deduplicating' },
-                  { num: 3, label: 'Analyzing with Claude AI' },
-                  { num: 4, label: 'Finalizing import' },
-                ].map((step) => (
-                  <div key={step.num} className="flex items-center gap-3">
-                    <div
-                      className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${
-                        importProgress && importProgress.step === step.num
-                          ? 'bg-primary text-primary-foreground'
-                          : importProgress && importProgress.step > step.num
-                          ? 'bg-primary/20 text-primary'
-                          : 'bg-muted text-muted-foreground'
-                      }`}
-                    >
-                      {importProgress && importProgress.step > step.num ? (
-                        <span>✓</span>
-                      ) : importProgress && importProgress.step === step.num ? (
-                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"></div>
-                      ) : (
-                        step.num
-                      )}
-                    </div>
-                    <div className="flex-1">
-                      <div
-                        className={`text-sm font-medium ${
-                          importProgress && importProgress.step >= step.num
-                            ? 'text-foreground'
-                            : 'text-muted-foreground'
-                        }`}
-                      >
-                        {step.label}
-                      </div>
-                      {importProgress &&
-                        importProgress.step === step.num &&
-                        importProgress.detail && (
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {importProgress.detail}
-                          </div>
-                        )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Overall message */}
-              {importProgress && importProgress.step === 5 && (
-                <div className="rounded-md bg-primary/10 p-3 text-center">
-                  <div className="font-semibold text-primary">
-                    {importProgress.message}
-                  </div>
-                  {importProgress.detail && (
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      {importProgress.detail}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Loading Modal via Portal */}
+      {typeof document !== 'undefined' && loadingModal && createPortal(loadingModal, document.body)}
     </div>
   )
 })

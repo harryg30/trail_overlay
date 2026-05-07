@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react'
 import type { Trail, TrailActivityItem } from '@/lib/types'
 
 export interface UseUrlParamSyncOptions {
-  drawerTab: 'trails' | 'activity' | 'networks' | 'imports'
+  drawerTab: 'map' | 'library' | 'activity' | 'edit'
   viewingTrail: Trail | null
   selectedActivityItem: TrailActivityItem | null
   /** Merge partial params into the URL without clobbering others. */
@@ -28,7 +28,8 @@ export function useUrlParamSync({
 
   useEffect(() => {
     if (!mountedRef.current) return
-    updateParams({ tab: drawerTab === 'trails' ? null : drawerTab })
+    updateParams({ tab: drawerTab === 'library' ? null : drawerTab })
+    // 'edit' serialises as 'edit' in the URL
   }, [drawerTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

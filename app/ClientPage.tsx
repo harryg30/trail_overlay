@@ -88,10 +88,15 @@ export default function ClientPage({
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  // Lifted from LeftDrawer so we can sync to the URL
-  const [drawerTab, setDrawerTab] = useState<'trails' | 'activity' | 'networks' | 'imports'>(
-    (initialParams?.tab as 'trails' | 'activity' | 'networks' | 'imports' | undefined) ?? 'trails'
-  )
+  // Lifted from LeftDrawer so we can sync to the URL.
+  // Legacy `?tab=trails` and `?tab=networks` URLs migrate to `library`.
+  const [drawerTab, setDrawerTab] = useState<'map' | 'library' | 'activity' | 'edit'>(() => {
+    const raw = initialParams?.tab
+    if (raw === 'map' || raw === 'library' || raw === 'activity' || raw === 'edit') return raw
+    if (raw === 'imports') return 'edit' // legacy redirect
+    if (raw === 'trails' || raw === 'networks') return 'library'
+    return 'library'
+  })
 
   // Photo open from TrailDetailPanel lightbox; cleared after first use so it doesn't re-restore
   const [pendingInitialPhotoId, setPendingInitialPhotoId] = useState<string | null>(
@@ -270,7 +275,6 @@ export default function ClientPage({
     mapTrailPhotos,
   } = useTrailPhotos(user, mapBounds)
   const osmTooZoomedOut = addTrailMode && !!mapBounds && (mapBounds.north - mapBounds.south) > 0.15
-  const [showOnMapOnly, setShowOnMapOnly] = useState(false)
   const [viewingTrail, setViewingTrail] = useState<Trail | null>(initialTrail)
   const [selectedActivityItem, setSelectedActivityItem] = useState<TrailActivityItem | null>(null)
 
@@ -1323,8 +1327,6 @@ export default function ClientPage({
           staged={staged}
           onSaveAddedTrail={handleSaveAddedTrail}
           mapBounds={mapBounds}
-          showOnMapOnly={showOnMapOnly}
-          onToggleShowOnMapOnly={() => setShowOnMapOnly(v => !v)}
           onTrailPhotoCreated={handleTrailPhotoCreated}
           onEnterAddTrailPhoto={handleEnterAddTrailPhoto}
           communityTrailPhotos={communityTrailPhotos}

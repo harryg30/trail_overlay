@@ -25,6 +25,9 @@ export async function GET(request: NextRequest) {
         created_at,
         approved_at,
         published_at,
+        suggestion_set_name,
+        ai_analyzed,
+        ai_analyzed_at,
         claude_prompt_tokens,
         claude_output_tokens,
         claude_cache_hit
@@ -47,6 +50,9 @@ export async function GET(request: NextRequest) {
       createdAt: row.created_at,
       approvedAt: row.approved_at,
       publishedAt: row.published_at,
+      suggestionSetName: row.suggestion_set_name,
+      aiAnalyzed: row.ai_analyzed,
+      aiAnalyzedAt: row.ai_analyzed_at,
       claudeUsage: {
         promptTokens: row.claude_prompt_tokens,
         outputTokens: row.claude_output_tokens,

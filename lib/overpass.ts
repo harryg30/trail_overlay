@@ -45,14 +45,8 @@ function buildOverpassQuery(
   highwayFilters: readonly string[]
 ): string {
   const bbox = `${bounds.south},${bounds.west},${bounds.north},${bounds.east}`
-  const filters = highwayFilters.map((h) => `way["highway"="${h}"](${bbox});`).join('\n  ')
-  return `[out:json][timeout:15];
-(
-  ${filters}
-);
-out body;
->;
-out skel qt;`
+  const filters = highwayFilters.map((h) => `way["highway"="${h}"](${bbox});`).join('')
+  return `[timeout:15][out:json];(${filters});out geom;`
 }
 
 function haversineKm(
