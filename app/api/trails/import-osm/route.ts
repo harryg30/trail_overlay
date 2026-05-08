@@ -100,8 +100,9 @@ async function processImportInBackground(
   regionName: string,
   filters: any
 ) {
-  console.log('[Import OSM BG] Starting background processing for draft:', draftId)
-  console.log('[Import OSM BG] Bbox:', { south, west, north, east })
+  const isDev = process.env.NODE_ENV === 'development'
+  if (isDev) console.log('[Import OSM BG] Starting background processing for draft:', draftId)
+  if (isDev) console.log('[Import OSM BG] Bbox:', { south, west, north, east })
 
   try {
     // Derive baseUrl from environment, with validation
@@ -114,7 +115,7 @@ async function processImportInBackground(
     baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
 
     const osmUrl = `${baseUrl}/api/osm?south=${south}&west=${west}&north=${north}&east=${east}&filters=path,track,cycleway`;
-    console.log('[Import OSM BG] Calling OSM endpoint:', osmUrl)
+    if (isDev) console.log('[Import OSM BG] Calling OSM endpoint:', osmUrl)
 
     let osmResponse;
     try {
@@ -128,7 +129,7 @@ async function processImportInBackground(
       return;
     }
 
-    console.log('[Import OSM BG] OSM API response status:', osmResponse.status)
+    if (isDev) console.log('[Import OSM BG] OSM API response status:', osmResponse.status)
 
     if (!osmResponse.ok) {
       const errorData = await osmResponse.json().catch(() => ({}));
@@ -281,7 +282,7 @@ function extractPolyline(
   for (const nodeId of element.nodes) {
     const node = nodeIndex.get(nodeId);
     if (!node) {
-      console.warn(`[Import] Missing node ${nodeId} for way ${element.id}`);
+      if (process.env.NODE_ENV === 'development') console.warn(`[Import] Missing node ${nodeId} for way ${element.id}`);
       return null; // Missing node data, skip this way
     }
     polyline.push([node.lat, node.lon]);

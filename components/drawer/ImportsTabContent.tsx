@@ -111,14 +111,12 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
   }, [drafts])
 
   useEffect(() => {
-    // Clear selectedTrailIds when expanding a different draft
-    if (expandedDraftId !== null) {
-      const currentDraft = drafts.find((d) => d.id === expandedDraftId)
-      if (currentDraft) {
-        setSelectedTrailIds(new Set())
-      }
-    }
-  }, [expandedDraftId, drafts])
+    // Clear selectedTrailIds when expanding a different draft.
+    // Intentionally not depending on `drafts` — optimistic in-place edits
+    // (e.g. saveEditTrail) update `drafts` and would otherwise wipe the
+    // current selection mid-review.
+    setSelectedTrailIds(new Set())
+  }, [expandedDraftId])
 
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
@@ -978,6 +976,19 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
                 </div>
               )}
 
+              {/* Approve button */}
+              <Button
+                onClick={() => handleApproveDraft(draft.id)}
+                disabled={selectedTrailIds.size === 0 || approving}
+                className="mb-3 w-full"
+              >
+                {approving ? (
+                  'Importing...'
+                ) : (
+                  `Import ${selectedTrailIds.size} ${selectedTrailIds.size === 1 ? 'trail' : 'trails'}`
+                )}
+              </Button>
+
               {/* Trail list */}
               <div className="flex-1 min-h-0 space-y-2 overflow-y-auto">
                 {[...draft.trails]
@@ -1124,19 +1135,6 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
                     )
                   })}
               </div>
-
-              {/* Approve button */}
-              <Button
-                onClick={() => handleApproveDraft(draft.id)}
-                disabled={selectedTrailIds.size === 0 || approving}
-                className="mt-4 w-full"
-              >
-                {approving ? (
-                  'Importing...'
-                ) : (
-                  `Import ${selectedTrailIds.size} ${selectedTrailIds.size === 1 ? 'trail' : 'trails'}`
-                )}
-              </Button>
 
               {/* Claude usage info */}
               {draft.aiAnalyzed && (
