@@ -65,11 +65,11 @@ function buildDiffLines(
   type FieldDef = { label: string; get: (p: TrailRevisionPayload) => string }
 
   const fields: FieldDef[] = [
-    { label: 'name',       get: p => p.name },
+    { label: 'name',       get: p => p.name || '' },
     { label: 'difficulty', get: p => formatDifficulty(p.difficulty) },
     { label: 'direction',  get: p => formatDirection(p.direction) },
-    { label: 'distance',   get: p => `${p.distanceKm.toFixed(2)} km` },
-    { label: 'elevation',  get: p => `${Math.round(p.elevationGainFt)} ft` },
+    { label: 'distance',   get: p => p.distanceKm != null ? `${p.distanceKm.toFixed(2)} km` : '' },
+    { label: 'elevation',  get: p => p.elevationGainFt != null ? `${Math.round(p.elevationGainFt)} ft` : '' },
     { label: 'notes',      get: p => p.notes?.trim() || '' },
   ]
 
@@ -78,6 +78,7 @@ function buildDiffLines(
   // Geometry field — compare by point count + distance
   const geoChanged =
     before && after &&
+    before.polyline && after.polyline &&
     (before.polyline.length !== after.polyline.length ||
       before.distanceKm !== after.distanceKm)
 

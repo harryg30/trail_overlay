@@ -20,8 +20,7 @@ export function EditNetworkContent({
   user,
   onOfficialMapLayerChange,
   onAlignmentMapPickChange,
-  pendingDigitizationTask,
-  onPendingDigitizationTaskChange,
+
 }: {
   trails: Trail[]
   networks: Network[]
@@ -34,8 +33,6 @@ export function EditNetworkContent({
   user: SessionUser | null
   onOfficialMapLayerChange: (layer: OfficialMapLayerPayload | null) => void
   onAlignmentMapPickChange: (handler: null | ((latlng: [number, number]) => void)) => void
-  pendingDigitizationTask: { id: string; label: string } | null
-  onPendingDigitizationTaskChange: (task: { id: string; label: string } | null) => void
 }) {
   const [name, setName] = useState(selectedNetwork?.name ?? '')
   const [selectedTrailIds, setSelectedTrailIds] = useState<Set<string>>(
@@ -125,11 +122,8 @@ export function EditNetworkContent({
           <OfficialMapAndTasksPanel
             networkId={selectedNetwork.id}
             user={user}
-            trails={trails}
             onOfficialMapLayerChange={onOfficialMapLayerChange}
             onAlignmentMapPickChange={onAlignmentMapPickChange}
-            pendingDigitizationTask={pendingDigitizationTask}
-            onPendingDigitizationTaskChange={onPendingDigitizationTaskChange}
           />
         )}
 

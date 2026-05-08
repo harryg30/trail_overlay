@@ -36,7 +36,6 @@ export function TrailEditDrawer({
   onDeleteTrail,
   networks,
   canPublish,
-  pendingDigitizationTask,
 }: {
   variant: 'draw' | 'edit'
   trailEditTool: TrailEditTool
@@ -55,8 +54,6 @@ export function TrailEditDrawer({
   onDeleteTrail?: () => Promise<string | null>
   networks: Network[]
   canPublish?: boolean
-  /** When set (draw variant), publishing will mark this digitization task complete. */
-  pendingDigitizationTask?: { id: string; label: string } | null
 }) {
   const [form, setForm] = useState<TrimFormState>({
     name: '',
@@ -133,12 +130,6 @@ export function TrailEditDrawer({
             <span className="ml-2">{distanceKm.toFixed(2)} km</span>
           )}
         </p>
-        {variant === 'draw' && pendingDigitizationTask && (
-          <p className="mt-1.5 rounded border border-electric/40 bg-primary/10 px-2 py-1 text-xs text-foreground">
-            Publishing will complete task:{' '}
-            <span className="font-semibold">{pendingDigitizationTask.label}</span>
-          </p>
-        )}
       </div>
 
       {variant === 'draw' && (
@@ -203,6 +194,37 @@ export function TrailEditDrawer({
               : trailEditTool === 'snap'
                 ? 'Snap to OSM: click to snap to nearest trail/road. Click a second point to auto-route between them.'
                 : 'Pencil: click line or drag points to edit; tap midpoints to insert. Eraser: remove a point.'}
+          </p>
+        </div>
+      )}
+
+      {variant === 'edit' && (
+        <div className="flex flex-col gap-2">
+          <p className="font-display text-xs font-normal uppercase tracking-[0.15em] text-muted-foreground">
+            Tools
+          </p>
+          <div className="flex flex-nowrap items-center gap-2 overflow-x-auto">
+            <button
+              type="button"
+              title="Snap to OSM"
+              aria-label="Snap to OSM tool"
+              aria-pressed={trailEditTool === 'snap'}
+              onClick={() => onSetTool('snap')}
+              className={`${toolBase} ${trailEditTool === 'snap' ? toolBtnActive : toolBtnIdle}`}
+            >
+              <FontAwesomeIcon icon={faMagnet} className="w-4 h-4" />
+            </button>
+            <button type="button" className={iconActionBtn} onClick={onUndo} disabled={!canUndo} title="Undo" aria-label="Undo">
+              <FontAwesomeIcon icon={faRotateLeft} className="w-4 h-4" />
+            </button>
+            <button type="button" className={iconActionBtn} onClick={onRedo} disabled={!canRedo} title="Redo" aria-label="Redo">
+              <FontAwesomeIcon icon={faRotateRight} className="w-4 h-4" />
+            </button>
+          </div>
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            {trailEditTool === 'snap'
+              ? 'Snap to OSM: drag endpoints to snap to nearest trail/road and auto-route along OSM ways.'
+              : 'Snap to OSM to adjust endpoints along OSM trails and roads.'}
           </p>
         </div>
       )}

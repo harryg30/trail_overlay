@@ -58,6 +58,18 @@ import {
   type MapBaseStyle,
 } from '@/lib/map-basemap'
 
+function escapeHtml(text: string | undefined): string {
+  if (!text) return ''
+  const map: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }
+  return text.replace(/[&<>"']/g, (char) => map[char])
+}
+
 export interface LeafletMapProps {
   rides: Ride[]
   hiddenRideIds: Set<string>
@@ -130,6 +142,15 @@ export interface LeafletMapProps {
   initialZoom?: number
   /** When true, skip the one-shot fit-to-trails-bounds on first load (URL already has position). */
   skipInitialFit?: boolean
+  /** Draft import trails to show on map when imports tab expanded. */
+  draftImportTrails?: any[]
+  draftImportSelectedIds?: Set<string>
+  hoveredImportTrailId?: string | null
+  onDraftImportTrailClick?: (osmWayId: string) => void
+  /** OSM import bbox draw mode: drag (or click-click) to define a rectangle. */
+  drawBboxMode?: boolean
+  drawBboxCorners?: [number, number][]
+  onBboxDrawn?: (corners: [[number, number], [number, number]]) => void
 }
 
 export default function LeafletMap({
@@ -198,6 +219,13 @@ export default function LeafletMap({
   initialCenter,
   initialZoom,
   skipInitialFit = false,
+  draftImportTrails = [],
+  draftImportSelectedIds = new Set(),
+  hoveredImportTrailId = null,
+  onDraftImportTrailClick,
+  drawBboxMode = false,
+  drawBboxCorners = [],
+  onBboxDrawn,
 }: LeafletMapProps) {
   const drawToolActive = addTrailMode && staged?.activeTool === 'draw'
   const osmToolActive = addTrailMode && staged?.activeTool === 'osm'
@@ -211,6 +239,9 @@ export default function LeafletMap({
   const userLocationLayerRef = useRef<L.LayerGroup | null>(null)
   const ridesLayerRef = useRef<L.LayerGroup | null>(null)
   const trailsLayerRef = useRef<L.LayerGroup | null>(null)
+  const draftImportTrailsLayerRef = useRef<L.LayerGroup | null>(null)
+  const drawBboxLayerRef = useRef<L.LayerGroup | null>(null)
+  const drawBboxPreviewLayerRef = useRef<L.LayerGroup | null>(null)
   const trimLayerRef = useRef<L.LayerGroup | null>(null)
   const selectedTrailLayerRef = useRef<L.LayerGroup | null>(null)
   const refineLayerRef = useRef<L.LayerGroup | null>(null)
@@ -288,6 +319,8 @@ export default function LeafletMap({
   onViewChangeRef.current = onViewChange
   const onStravaSegmentSelectedRef = useRef(onStravaSegmentSelected)
   onStravaSegmentSelectedRef.current = onStravaSegmentSelected
+  const onBboxDrawnRef = useRef(onBboxDrawn)
+  onBboxDrawnRef.current = onBboxDrawn
   trimModeRef.current = trimMode
   editTrailModeRef.current = editTrailMode
   onTrimPointSelectedRef.current = onTrimPointSelected
@@ -378,6 +411,9 @@ export default function LeafletMap({
     networksLayerRef.current = L.layerGroup().addTo(map)
     ridesLayerRef.current = L.layerGroup().addTo(map)
     trailsLayerRef.current = L.layerGroup().addTo(map)
+    draftImportTrailsLayerRef.current = L.layerGroup().addTo(map)
+    drawBboxLayerRef.current = L.layerGroup().addTo(map)
+    drawBboxPreviewLayerRef.current = L.layerGroup().addTo(map)
     trimLayerRef.current = L.layerGroup().addTo(map)
     averagedTrimLayerRef.current = L.layerGroup().addTo(map)
     hoverLayerRef.current = L.layerGroup().addTo(map)
@@ -653,6 +689,9 @@ export default function LeafletMap({
       draftTrailsLayerRef.current = null
       drawTrailLayerRef.current = null
       osmLayerRef.current = null
+      draftImportTrailsLayerRef.current = null
+      drawBboxLayerRef.current = null
+      drawBboxPreviewLayerRef.current = null
     }
   }, [])
 
@@ -705,6 +744,19 @@ export default function LeafletMap({
     const bounds = L.latLngBounds(allPoints)
     mapRef.current.flyToBounds(bounds, { padding: [40, 40], maxZoom: 15, duration: 1.2 })
   }, [trails]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Initialize snap anchor points from refined polyline when editing a trail with snap tool
+  useEffect(() => {
+    if (!mapRef.current) return
+
+    if (editTrailMode && trailEditTool === 'snap' && refinePolyline && refinePolyline.length > 0) {
+      // Set anchor points at start and end of the trail for routing between them
+      setSnapAnchorPoints([refinePolyline[0], refinePolyline[refinePolyline.length - 1]])
+    } else if (!editTrailMode || trailEditTool !== 'snap') {
+      // Clear anchor points when exiting edit mode or switching tools
+      setSnapAnchorPoints([])
+    }
+  }, [editTrailMode, trailEditTool, refinePolyline])
 
   // Effect 3: rides layer
   useEffect(() => {
@@ -891,11 +943,288 @@ export default function LeafletMap({
     })
   }, [trails, editTrailMode, trimMode, zoom, mapDrawingSurface, placingPhoto, placingTrailPhoto])
 
+  // Effect: Draft import trails layer (shown when imports tab is open)
+  useEffect(() => {
+    if (!mapRef.current || !draftImportTrailsLayerRef.current) return
+
+    draftImportTrailsLayerRef.current.clearLayers()
+
+    if (draftImportTrails.length === 0) return
+
+    // Render hovered trail last so it stacks on top of all others.
+    const sortedTrails = [...draftImportTrails].sort((a, b) => {
+      if (a.osmWayId === hoveredImportTrailId) return 1
+      if (b.osmWayId === hoveredImportTrailId) return -1
+      return 0
+    })
+
+    sortedTrails.forEach((trail) => {
+      if (!trail.polyline || trail.polyline.length < 2) return
+
+      const isSelected = draftImportSelectedIds.has(trail.osmWayId)
+      const isHovered = trail.osmWayId === hoveredImportTrailId
+      // Hovered trails get a vivid amber so they stand out from selected (green) and idle (gray).
+      const trailColor = isHovered ? '#f59e0b' : isSelected ? '#10b981' : '#6b7280'
+      const weight = isHovered ? 6 : isSelected ? 4 : 2
+      const opacity = isHovered ? 1 : isSelected ? 1 : 0.6
+
+      // Build tooltip content with escaped values
+      const difficultyLabel = trail.difficulty ? trail.difficulty.replace('_', ' ') : 'not set'
+      const distanceStr = trail.distanceKm != null ? `${trail.distanceKm.toFixed(1)} km` : '? km'
+      const scoreStr = trail.score != null ? `${trail.score}/100` : '?'
+      const tooltipContent = `
+        <div style="min-width: 200px;">
+          <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">${escapeHtml(trail.name)}</div>
+          <div style="font-size: 12px; color: #666; margin-bottom: 2px;">
+            <span style="text-transform: capitalize;">${difficultyLabel}</span> ·
+            <span style="text-transform: capitalize;">${trail.type || 'mixed'}</span> ·
+            ${distanceStr}
+          </div>
+          <div style="font-size: 12px; color: #666; margin-bottom: 6px;">
+            Quality score: ${scoreStr}
+          </div>
+          ${trail.reasoning ? `<div style="font-size: 11px; font-style: italic; color: #888; margin-top: 4px; border-top: 1px solid #eee; padding-top: 4px;">${escapeHtml(trail.reasoning)}</div>` : ''}
+          <div style="font-size: 11px; color: #999; margin-top: 6px; padding-top: 4px; border-top: 1px solid #eee;">
+            ${isSelected ? '✓ Selected' : 'Click to select'}
+          </div>
+        </div>
+      `
+
+      const pl = L.polyline(trail.polyline, {
+        color: trailColor,
+        weight,
+        opacity,
+        interactive: false,
+        ...catalogLineHints,
+      })
+      pl.addTo(draftImportTrailsLayerRef.current!)
+
+      // Wide invisible hit area for clicks
+      const hitArea = L.polyline(trail.polyline, {
+        color: trailColor,
+        weight: 20,
+        opacity: 0,
+        interactive: true,
+        ...catalogLineHints,
+      })
+
+      hitArea.on('click', (e: L.LeafletMouseEvent) => {
+        L.DomEvent.stopPropagation(e)
+        if (onDraftImportTrailClick) {
+          onDraftImportTrailClick(trail.osmWayId)
+        }
+      })
+
+      hitArea.on('mouseover', (e: L.LeafletMouseEvent) => {
+        pl.setStyle({ weight: weight + 3, opacity: 1 })
+      })
+
+      hitArea.on('mouseout', () => {
+        pl.setStyle({ weight, opacity })
+      })
+
+      // Bind tooltip that shows on hover
+      hitArea.bindTooltip(tooltipContent, {
+        sticky: true,
+        opacity: 0.95,
+        className: 'draft-trail-tooltip',
+      })
+
+      hitArea.addTo(draftImportTrailsLayerRef.current!)
+    })
+  }, [draftImportTrails, draftImportSelectedIds, hoveredImportTrailId, onDraftImportTrailClick])
+
+  // Effect: committed bbox rectangle + draggable corner handles for fine-tuning
+  useEffect(() => {
+    const layer = drawBboxLayerRef.current
+    if (!layer) return
+    layer.clearLayers()
+    if (drawBboxCorners.length !== 2 || drawBboxMode) return
+
+    const [[south0, west0], [north0, east0]] = drawBboxCorners as [[number, number], [number, number]]
+    let curS = south0
+    let curN = north0
+    let curW = west0
+    let curE = east0
+
+    const rect = L.rectangle(L.latLngBounds([curS, curW], [curN, curE]), {
+      color: '#10b981',
+      weight: 2,
+      fillColor: '#10b981',
+      fillOpacity: 0.15,
+      interactive: false,
+    }).addTo(layer)
+
+    const handleIcon = L.divIcon({
+      className: 'bbox-resize-handle',
+      html: '<div style="width:14px;height:14px;border:2px solid #10b981;background:white;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,0.3);box-sizing:border-box"></div>',
+      iconSize: [14, 14],
+      iconAnchor: [7, 7],
+    })
+
+    type Kind = 'sw' | 'nw' | 'ne' | 'se'
+    const positionFor = (k: Kind): L.LatLngTuple =>
+      k === 'sw' ? [curS, curW]
+      : k === 'nw' ? [curN, curW]
+      : k === 'ne' ? [curN, curE]
+      : [curS, curE]
+
+    const handles: { kind: Kind; marker: L.Marker }[] = (['sw', 'nw', 'ne', 'se'] as Kind[]).map((kind) => {
+      const marker = L.marker(positionFor(kind), { draggable: true, icon: handleIcon, autoPan: true })
+      marker.addTo(layer)
+      return { kind, marker }
+    })
+
+    const applyDrag = (kind: Kind, ll: L.LatLng) => {
+      if (kind === 'sw') { curS = ll.lat; curW = ll.lng }
+      else if (kind === 'nw') { curN = ll.lat; curW = ll.lng }
+      else if (kind === 'ne') { curN = ll.lat; curE = ll.lng }
+      else { curS = ll.lat; curE = ll.lng }
+      // Normalize so dragging past the opposite edge still produces a valid rect
+      const south = Math.min(curS, curN)
+      const north = Math.max(curS, curN)
+      const west = Math.min(curW, curE)
+      const east = Math.max(curW, curE)
+      rect.setBounds(L.latLngBounds([south, west], [north, east]))
+      handles.forEach((h) => {
+        if (h.kind === kind) return
+        const pos =
+          h.kind === 'sw' ? [south, west]
+          : h.kind === 'nw' ? [north, west]
+          : h.kind === 'ne' ? [north, east]
+          : [south, east]
+        h.marker.setLatLng(pos as L.LatLngTuple)
+      })
+    }
+
+    handles.forEach(({ kind, marker }) => {
+      marker.on('drag', () => applyDrag(kind, marker.getLatLng()))
+      marker.on('dragend', () => {
+        const south = Math.min(curS, curN)
+        const north = Math.max(curS, curN)
+        const west = Math.min(curW, curE)
+        const east = Math.max(curW, curE)
+        curS = south; curN = north; curW = west; curE = east
+        onBboxDrawnRef.current?.([
+          [south, west],
+          [north, east],
+        ])
+      })
+    })
+  }, [drawBboxCorners, drawBboxMode])
+
+  // Effect: drag-to-resize bbox with live preview (also supports click-click)
+  useEffect(() => {
+    const map = mapRef.current
+    const previewLayer = drawBboxPreviewLayerRef.current
+    if (!map || !previewLayer) return
+    if (!drawBboxMode) {
+      previewLayer.clearLayers()
+      return
+    }
+
+    map.dragging.disable()
+    map.boxZoom?.disable()
+
+    let firstCorner: L.LatLng | null = null
+    let dragStart: L.LatLng | null = null
+    let dragMoved = false
+    let previewRect: L.Rectangle | null = null
+
+    const renderPreview = (a: L.LatLng, b: L.LatLng) => {
+      const bounds = L.latLngBounds(a, b)
+      if (previewRect) {
+        previewRect.setBounds(bounds)
+      } else {
+        previewRect = L.rectangle(bounds, {
+          color: '#10b981',
+          weight: 2,
+          dashArray: '6,4',
+          fillColor: '#10b981',
+          fillOpacity: 0.12,
+          interactive: false,
+        }).addTo(previewLayer)
+      }
+    }
+
+    const onDown = (e: L.LeafletMouseEvent) => {
+      dragStart = e.latlng
+      dragMoved = false
+    }
+
+    const onMove = (e: L.LeafletMouseEvent) => {
+      const anchor = dragStart ?? firstCorner
+      if (!anchor) return
+      if (dragStart) {
+        const px1 = map.latLngToContainerPoint(dragStart)
+        const px2 = map.latLngToContainerPoint(e.latlng)
+        if (px1.distanceTo(px2) > 4) dragMoved = true
+      }
+      renderPreview(anchor, e.latlng)
+    }
+
+    const onUp = (e: L.LeafletMouseEvent) => {
+      if (!dragStart) return
+      const start = dragStart
+      dragStart = null
+
+      if (dragMoved) {
+        // Finalize via drag
+        firstCorner = null
+        previewLayer.clearLayers()
+        previewRect = null
+        onBboxDrawnRef.current?.([
+          [start.lat, start.lng],
+          [e.latlng.lat, e.latlng.lng],
+        ])
+        return
+      }
+
+      // Click (no meaningful drag)
+      if (!firstCorner) {
+        firstCorner = start
+        // Keep a small marker to anchor the preview while waiting for second click
+        previewLayer.clearLayers()
+        previewRect = null
+        L.circleMarker(start, {
+          radius: 5,
+          color: '#10b981',
+          fillColor: '#10b981',
+          fillOpacity: 1,
+          weight: 2,
+          interactive: false,
+        }).addTo(previewLayer)
+      } else {
+        const a = firstCorner
+        firstCorner = null
+        previewLayer.clearLayers()
+        previewRect = null
+        onBboxDrawnRef.current?.([
+          [a.lat, a.lng],
+          [e.latlng.lat, e.latlng.lng],
+        ])
+      }
+    }
+
+    map.on('mousedown', onDown)
+    map.on('mousemove', onMove)
+    map.on('mouseup', onUp)
+
+    return () => {
+      map.off('mousedown', onDown)
+      map.off('mousemove', onMove)
+      map.off('mouseup', onUp)
+      map.dragging.enable()
+      map.boxZoom?.enable()
+      previewLayer.clearLayers()
+    }
+  }, [drawBboxMode])
+
   // Map container cursor: mode + trail picker vs geometry + pencil vs eraser
   useEffect(() => {
     if (!mapRef.current) return
-    mapRef.current.getContainer().style.cursor = getResolvedMapCursor()
-  }, [getResolvedMapCursor])
+    mapRef.current.getContainer().style.cursor = drawBboxMode ? 'crosshair' : getResolvedMapCursor()
+  }, [getResolvedMapCursor, drawBboxMode])
 
   // Effect 5: start marker (before second point is selected)
   useEffect(() => {
@@ -1222,7 +1551,7 @@ export default function LeafletMap({
         interactive: false,
         ...catalogLineHints,
       })
-        .bindTooltip(`Draft: ${draft.name}`, { sticky: true })
+        .bindTooltip(`Draft: ${escapeHtml(draft.name)}`, { sticky: true })
         .addTo(draftTrailsLayerRef.current!)
     })
   }, [draftTrails])

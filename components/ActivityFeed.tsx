@@ -2,16 +2,12 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import type { Trail, TrailActivityItem, TrailRevisionAction } from '@/lib/types'
-import type { MapBounds } from '@/lib/geo-utils'
-import { polylineInBounds } from '@/lib/geo-utils'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faSpinner } from '@fortawesome/free-solid-svg-icons'
 
 interface ActivityFeedProps {
-  showOnMapOnly: boolean
-  mapBounds: MapBounds | null
   trails: Trail[]
   onOpenViewTrail: (trail: Trail) => void
   onSelectActivityItem?: (item: TrailActivityItem) => void
@@ -38,7 +34,7 @@ function formatRelativeTime(date: Date): string {
   return date.toLocaleDateString()
 }
 
-export function ActivityFeed({ showOnMapOnly, mapBounds, trails, onOpenViewTrail, onSelectActivityItem }: ActivityFeedProps) {
+export function ActivityFeed({ trails, onOpenViewTrail, onSelectActivityItem }: ActivityFeedProps) {
   const [items, setItems] = useState<TrailActivityItem[]>([])
   const [loading, setLoading] = useState(false)
   const [offset, setOffset] = useState(0)
@@ -81,33 +77,17 @@ export function ActivityFeed({ showOnMapOnly, mapBounds, trails, onOpenViewTrail
     loadPage(0, true)
   }, [loadPage])
 
-  // Build set of trail IDs visible on map for filtering
-  const visibleTrailIds: Set<string> | null =
-    showOnMapOnly && mapBounds
-      ? new Set(
-          trails
-            .filter(t => polylineInBounds(t.polyline, mapBounds))
-            .map(t => t.id)
-        )
-      : null
-
-  const filtered = visibleTrailIds
-    ? items.filter(item => visibleTrailIds.has(item.trailId))
-    : items
-
   return (
     <div className="flex flex-col gap-2 px-4 py-4">
       {error && (
         <p className="text-xs text-destructive">{error}</p>
       )}
 
-      {filtered.length === 0 && !loading ? (
-        <p className="text-xs text-muted-foreground">
-          {showOnMapOnly ? 'No recent activity in current map view.' : 'No recent activity yet.'}
-        </p>
+      {items.length === 0 && !loading ? (
+        <p className="text-xs text-muted-foreground">No recent activity yet.</p>
       ) : (
         <ul className="flex flex-col gap-0">
-          {filtered.map(item => {
+          {items.map(item => {
             const meta = ACTION_META[item.action] ?? { label: item.action, cls: 'bg-border text-foreground border-border' }
             const matchedTrail = trails.find(t => t.id === item.trailId)
             const isDeleted = item.action === 'delete'
@@ -159,7 +139,7 @@ export function ActivityFeed({ showOnMapOnly, mapBounds, trails, onOpenViewTrail
         </div>
       )}
 
-      {!loading && hasMore && !visibleTrailIds && (
+      {!loading && hasMore && (
         <Button
           type="button"
           variant="outlineThick"

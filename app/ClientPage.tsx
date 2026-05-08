@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import LeftDrawer from '@/components/LeftDrawer'
+import { type ImportsTabContentHandle } from '@/components/drawer/ImportsTabContent'
 import AnnouncementModal from '@/components/AnnouncementModal'
 import { ChangeDetailModal } from '@/components/trail/ChangeDetailModal'
 import { ANNOUNCEMENT_VERSION, ANNOUNCEMENT } from '@/lib/announcement'
@@ -87,10 +88,15 @@ export default function ClientPage({
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  // Lifted from LeftDrawer so we can sync to the URL
-  const [drawerTab, setDrawerTab] = useState<'trails' | 'activity' | 'networks'>(
-    (initialParams?.tab as 'trails' | 'activity' | 'networks' | undefined) ?? 'trails'
-  )
+  // Lifted from LeftDrawer so we can sync to the URL.
+  // Legacy `?tab=trails` and `?tab=networks` URLs migrate to `library`.
+  const [drawerTab, setDrawerTab] = useState<'map' | 'library' | 'activity' | 'edit'>(() => {
+    const raw = initialParams?.tab
+    if (raw === 'map' || raw === 'library' || raw === 'activity' || raw === 'edit') return raw
+    if (raw === 'imports') return 'edit' // legacy redirect
+    if (raw === 'trails' || raw === 'networks') return 'library'
+    return 'library'
+  })
 
   // Photo open from TrailDetailPanel lightbox; cleared after first use so it doesn't re-restore
   const [pendingInitialPhotoId, setPendingInitialPhotoId] = useState<string | null>(
@@ -113,6 +119,37 @@ export default function ClientPage({
   const [trails, setTrails] = useState<Trail[]>([])
   const [networks, setNetworks] = useState<Network[]>([])
   const [draftTrails, setDraftTrails] = useState<DraftTrail[]>([])
+  const [draftImportTrails, setDraftImportTrails] = useState<any[]>([])
+  const [draftImportSelectedIds, setDraftImportSelectedIds] = useState<Set<string>>(new Set())
+  const [hoveredImportTrailId, setHoveredImportTrailId] = useState<string | null>(null)
+  const [drawBboxMode, setDrawBboxMode] = useState(false)
+  const [drawBboxCorners, setDrawBboxCorners] = useState<[number, number][]>([])
+  const importsTabRef = useRef<ImportsTabContentHandle>(null)
+
+  const handleStartDrawBbox = useCallback(() => {
+    setDrawBboxCorners([])
+    setDrawBboxMode(true)
+  }, [])
+
+  const handleClearDrawBbox = useCallback(() => {
+    setDrawBboxCorners([])
+    setDrawBboxMode(false)
+  }, [])
+
+  const handleDraftImportTrailsChange = useCallback((trails: any[], selectedIds: Set<string>) => {
+    setDraftImportTrails(trails)
+    setDraftImportSelectedIds(selectedIds)
+  }, [])
+
+  const handleBboxDrawn = useCallback((corners: [[number, number], [number, number]]) => {
+    const [a, b] = corners
+    const south = Math.min(a[0], b[0])
+    const north = Math.max(a[0], b[0])
+    const west = Math.min(a[1], b[1])
+    const east = Math.max(a[1], b[1])
+    setDrawBboxCorners([[south, west], [north, east]])
+    setDrawBboxMode(false)
+  }, [])
   const [hiddenNetworkIds, setHiddenNetworkIds] = useState<Set<string>>(new Set())
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [showAnnouncement, setShowAnnouncement] = useState(false)
@@ -238,7 +275,6 @@ export default function ClientPage({
     mapTrailPhotos,
   } = useTrailPhotos(user, mapBounds)
   const osmTooZoomedOut = addTrailMode && !!mapBounds && (mapBounds.north - mapBounds.south) > 0.15
-  const [showOnMapOnly, setShowOnMapOnly] = useState(false)
   const [viewingTrail, setViewingTrail] = useState<Trail | null>(initialTrail)
   const [selectedActivityItem, setSelectedActivityItem] = useState<TrailActivityItem | null>(null)
 
@@ -258,10 +294,6 @@ export default function ClientPage({
 
   const [officialMapLayer, setOfficialMapLayer] = useState<OfficialMapLayerPayload | null>(null)
   const [alignMapHandler, setAlignMapHandler] = useState<null | ((ll: [number, number]) => void)>(null)
-  const [pendingDigitizationTask, setPendingDigitizationTask] = useState<{
-    id: string
-    label: string
-  } | null>(null)
 
   useEffect(() => {
     if (editMode !== 'edit-network' && editMode !== 'add-trail') {
@@ -380,6 +412,28 @@ export default function ClientPage({
         if (data.success) setNetworks(data.networks)
       })
       .catch(console.error)
+  }, [])
+
+  const reloadTrailMapObjects = useCallback(async () => {
+    try {
+      const [trailsRes, networksRes] = await Promise.all([
+        fetch('/api/trails'),
+        fetch('/api/networks'),
+      ])
+      const [trailsData, networksData] = await Promise.all([
+        trailsRes.json(),
+        networksRes.json(),
+      ])
+
+      if (trailsData.success && Array.isArray(trailsData.trails)) {
+        setTrails(trailsData.trails)
+      }
+      if (networksData.success && Array.isArray(networksData.networks)) {
+        setNetworks(networksData.networks)
+      }
+    } catch (err) {
+      console.error('Failed to reload trail map objects:', err)
+    }
   }, [])
 
   const trimSegment = useMemo<TrimSegment | null>(() => {
@@ -543,15 +597,6 @@ export default function ClientPage({
           }
         }
 
-        if (pendingDigitizationTask && data.savedTrails[0]) {
-          await fetch(`/api/digitization-tasks/${pendingDigitizationTask.id}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ completedTrailId: data.savedTrails[0].id }),
-          })
-          setPendingDigitizationTask(null)
-        }
-
         if (editingDraftLocalId) {
           setDraftTrails((prev) => {
             const next = prev.filter((d) => d.localId !== editingDraftLocalId)
@@ -561,6 +606,8 @@ export default function ClientPage({
           setEditingDraftLocalId(null)
           setDraftSidebarPrefill(null)
         }
+
+        await reloadTrailMapObjects()
 
         setMode(null)
         return null
@@ -574,7 +621,6 @@ export default function ClientPage({
       user,
       handleSaveDraft,
       networks,
-      pendingDigitizationTask,
       editingDraftLocalId,
       setMode,
     ]
@@ -610,13 +656,14 @@ export default function ClientPage({
           persistDrafts(next)
           return next
         })
+        await reloadTrailMapObjects()
         return null
       }
       return data.error ?? 'Publish failed'
     } catch {
       return 'Network error'
     }
-  }, [draftTrails])
+  }, [draftTrails, reloadTrailMapObjects])
 
   const handleDeleteDraft = useCallback((localId: string) => {
     setDraftTrails((prev) => {
@@ -734,6 +781,17 @@ export default function ClientPage({
   const handleSelectActivityItem = useCallback((item: TrailActivityItem) => {
     setSelectedActivityItem(item)
   }, [])
+
+  // When revision modal opens, switch left drawer to show edit form
+  useEffect(() => {
+    if (selectedActivityItem) {
+      const trail = trails.find(t => t.id === selectedActivityItem.trailId)
+      if (trail) {
+        setSelectedTrail(trail)
+        setMode('edit-trail')
+      }
+    }
+  }, [selectedActivityItem?.trailId, trails, setSelectedTrail, setMode])
 
   const handlePhotoOpen = useCallback((photoId: string) => {
     setPendingInitialPhotoId(null)  // consumed; prevent re-restore on subsequent opens
@@ -1269,8 +1327,6 @@ export default function ClientPage({
           staged={staged}
           onSaveAddedTrail={handleSaveAddedTrail}
           mapBounds={mapBounds}
-          showOnMapOnly={showOnMapOnly}
-          onToggleShowOnMapOnly={() => setShowOnMapOnly(v => !v)}
           onTrailPhotoCreated={handleTrailPhotoCreated}
           onEnterAddTrailPhoto={handleEnterAddTrailPhoto}
           communityTrailPhotos={communityTrailPhotos}
@@ -1285,8 +1341,6 @@ export default function ClientPage({
           onFlyToNetwork={requestFlyToNetwork}
           onOfficialMapLayerChange={setOfficialMapLayer}
           onAlignmentMapPickChange={setAlignMapHandler}
-          pendingDigitizationTask={pendingDigitizationTask}
-          onPendingDigitizationTaskChange={setPendingDigitizationTask}
           viewingTrail={viewingTrail}
           onOpenViewTrail={handleOpenViewTrail}
           onCloseViewTrail={handleCloseViewTrail}
@@ -1297,6 +1351,13 @@ export default function ClientPage({
           initialPhotoId={pendingInitialPhotoId ?? undefined}
           onPhotoOpen={handlePhotoOpen}
           onPhotoClose={handlePhotoClose}
+          onDraftTrailsChange={handleDraftImportTrailsChange}
+          onHoverImportTrail={setHoveredImportTrailId}
+          importsTabRef={importsTabRef}
+          onStartDrawBbox={handleStartDrawBbox}
+          drawBboxCorners={drawBboxCorners}
+          onClearDrawBbox={handleClearDrawBbox}
+          onTrailsChanged={reloadTrailMapObjects}
         />
       </div>
 
@@ -1399,6 +1460,15 @@ export default function ClientPage({
         }
         initialZoom={initialParams?.zoom ?? undefined}
         skipInitialFit={initialParams?.lat != null && initialParams?.lng != null}
+        draftImportTrails={draftImportTrails}
+        draftImportSelectedIds={draftImportSelectedIds}
+        hoveredImportTrailId={hoveredImportTrailId}
+        onDraftImportTrailClick={(osmWayId) => {
+          importsTabRef.current?.toggleTrailSelection(osmWayId)
+        }}
+        drawBboxMode={drawBboxMode}
+        drawBboxCorners={drawBboxCorners}
+        onBboxDrawn={handleBboxDrawn}
       />
 
       {photoLightboxSrc && (

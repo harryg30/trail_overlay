@@ -39,21 +39,29 @@ function buildOverpassQuery(
   filters: string[]
 ): string {
   const bbox = `${south},${west},${north},${east}`
-  const ways = filters.map((h) => `way["highway"="${h}"](${bbox});`).join('\n  ')
-  return `[out:json][timeout:15];\n(\n  ${ways}\n);\nout body;\n>;\nout skel qt;`
+  const ways = filters.map((h) => `way["highway"="${h}"](${bbox});`).join('')
+  return `[timeout:15][out:json];(${ways});out geom;`
 }
 
 async function fetchOverpass(key: string, query: string): Promise<unknown> {
+  console.log('[Overpass] Query:', query.slice(0, 200))
+
   const res = await fetch(OVERPASS_ENDPOINT, {
     method: 'POST',
     body: `data=${encodeURIComponent(query)}`,
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'Trail-Overlay-App/1.0'
+    },
   })
 
+  console.log('[Overpass] Response status:', res.status)
   const text = await res.text()
+  console.log('[Overpass] Response body:', text.slice(0, 200))
 
   if (!res.ok) {
     const code = classifyOverpassFailure(res.status, text)
+    console.error('[Overpass] HTTP', res.status, ':', text.slice(0, 500))
     throw new OsmFetchError(overpassErrorMessage(code, res.status), code, res.status)
   }
 
@@ -85,47 +93,68 @@ async function fetchOverpass(key: string, query: string): Promise<unknown> {
 }
 
 export async function GET(request: NextRequest) {
-  const sp = request.nextUrl.searchParams
-  const south = Number(sp.get('south'))
-  const west = Number(sp.get('west'))
-  const north = Number(sp.get('north'))
-  const east = Number(sp.get('east'))
-
-  if ([south, west, north, east].some((v) => !Number.isFinite(v))) {
-    return NextResponse.json({ error: 'Invalid bbox' }, { status: 400 })
-  }
-
-  const filters = sp.get('filters')
-    ? sp.get('filters')!.split(',').filter(Boolean)
-    : DEFAULT_FILTERS
-
-  const key = buildCacheKey(south, west, north, east, filters)
-
-  // 1. Serve from cache
-  const cached = cache.get(key)
-  if (cached && cached.expiresAt > Date.now()) {
-    return NextResponse.json(cached.data, {
-      headers: { 'X-Cache': 'HIT' },
-    })
-  }
-
-  // 2. Coalesce with an in-flight request for the same key
   try {
-    let promise = inflight.get(key)
-    let coalesced = false
-    if (!promise) {
-      const query = buildOverpassQuery(south, west, north, east, filters)
-      promise = fetchOverpass(key, query)
-      inflight.set(key, promise)
-    } else {
-      coalesced = true
+    console.log('[OSM GET] Handler start')
+
+    const sp = request.nextUrl.searchParams
+    const south = Number(sp.get('south'))
+    const west = Number(sp.get('west'))
+    const north = Number(sp.get('north'))
+    const east = Number(sp.get('east'))
+
+    console.log('[OSM GET] Received request with bbox:', { south, west, north, east })
+
+    if ([south, west, north, east].some((v) => !Number.isFinite(v))) {
+      console.log('[OSM GET] Invalid bbox')
+      return NextResponse.json({ error: 'Invalid bbox' }, { status: 400 })
     }
 
-    const data = await promise
-    return NextResponse.json(data, {
-      headers: { 'X-Cache': coalesced ? 'COALESCED' : 'MISS' },
-    })
+    const filters = sp.get('filters')
+      ? sp.get('filters')!.split(',').filter(Boolean)
+      : DEFAULT_FILTERS
+
+    console.log('[OSM GET] Filters:', filters)
+
+    const key = buildCacheKey(south, west, north, east, filters)
+
+    // 1. Serve from cache
+    const cached = cache.get(key)
+    if (cached && cached.expiresAt > Date.now()) {
+      console.log('[OSM GET] Serving from cache')
+      return NextResponse.json(cached.data, {
+        headers: { 'X-Cache': 'HIT' },
+      })
+    }
+
+    // 2. Coalesce with an in-flight request for the same key
+    try {
+      let promise = inflight.get(key)
+      let coalesced = false
+      if (!promise) {
+        console.log('[OSM GET] Building query')
+        const query = buildOverpassQuery(south, west, north, east, filters)
+        console.log('[OSM GET] Query built:', query.slice(0, 150))
+        promise = fetchOverpass(key, query)
+        inflight.set(key, promise)
+      } else {
+        console.log('[OSM GET] Coalescing with existing request')
+        coalesced = true
+      }
+
+      console.log('[OSM GET] Awaiting Overpass response')
+      const data = await promise
+      console.log('[OSM GET] Got Overpass data')
+      return NextResponse.json(data, {
+        headers: { 'X-Cache': coalesced ? 'COALESCED' : 'MISS' },
+      })
+    } catch (err) {
+      console.error('[OSM GET] Error in main flow:', err)
+      throw err
+    } finally {
+      inflight.delete(key)
+    }
   } catch (err) {
+    console.error('[OSM GET] Outer catch:', err)
     if (err instanceof OsmFetchError) {
       const status =
         err.code === 'rate_limited'
@@ -141,7 +170,5 @@ export async function GET(request: NextRequest) {
     console.error('Overpass proxy error:', err)
     const msg = err instanceof Error ? err.message : 'Failed to fetch from Overpass'
     return NextResponse.json({ error: msg, code: 'upstream_error' as const }, { status: 502 })
-  } finally {
-    inflight.delete(key)
   }
 }

@@ -5,13 +5,9 @@ import type { SessionUser } from '@/lib/auth'
 import type {
   MapOverlayAlignmentPoint,
   MapOverlayRecord,
-  NetworkDigitizationTask,
   OfficialMapLayerPayload,
-  Trail,
-  DigitizationTaskKind,
 } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 
 type AlignPhase = 'idle' | 'img1' | 'map1' | 'img2' | 'map2'
 
@@ -23,40 +19,24 @@ type AlignDraft = {
   img2?: { x: number; y: number }
 }
 
-const KIND_OPTIONS: { value: DigitizationTaskKind; label: string }[] = [
-  { value: 'named_route', label: 'Named route' },
-  { value: 'intersection_route', label: 'Intersection route' },
-  { value: 'loop', label: 'Loop' },
-  { value: 'other', label: 'Other' },
-]
-
 export function OfficialMapAndTasksPanel({
   networkId,
   user,
-  trails,
   onOfficialMapLayerChange,
   onAlignmentMapPickChange,
-  pendingDigitizationTask,
-  onPendingDigitizationTaskChange,
 }: {
   networkId: string
   user: SessionUser | null
-  trails: Trail[]
   onOfficialMapLayerChange: (layer: OfficialMapLayerPayload | null) => void
   onAlignmentMapPickChange: (handler: null | ((latlng: [number, number]) => void)) => void
-  pendingDigitizationTask: { id: string; label: string } | null
-  onPendingDigitizationTaskChange: (task: { id: string; label: string } | null) => void
 }) {
   const [overlay, setOverlay] = useState<MapOverlayRecord | null>(null)
   const [alignmentPoints, setAlignmentPoints] = useState<MapOverlayAlignmentPoint[]>([])
-  const [tasks, setTasks] = useState<NetworkDigitizationTask[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [overlayVisible, setOverlayVisible] = useState(true)
   const [alignDraft, setAlignDraft] = useState<AlignDraft | null>(null)
-  const [newTaskKind, setNewTaskKind] = useState<DigitizationTaskKind>('loop')
-  const [newTaskLabel, setNewTaskLabel] = useState('')
 
   const pushLayer = useCallback(
     (o: MapOverlayRecord | null, visible: boolean) => {
@@ -78,19 +58,13 @@ export function OfficialMapAndTasksPanel({
     setLoading(true)
     setError(null)
     try {
-      const [mapRes, taskRes] = await Promise.all([
-        fetch(`/api/networks/${networkId}/map-overlay`),
-        fetch(`/api/networks/${networkId}/digitization-tasks`),
-      ])
+      const mapRes = await fetch(`/api/networks/${networkId}/map-overlay`)
       const mapData = await mapRes.json()
-      const taskData = await taskRes.json()
       if (!mapRes.ok) throw new Error(mapData.error || 'Failed to load map')
-      if (!taskRes.ok) throw new Error(taskData.error || 'Failed to load tasks')
       const nextOverlay = mapData.overlay as MapOverlayRecord | null
       const pts = (mapData.alignmentPoints || []) as MapOverlayAlignmentPoint[]
       setOverlay(nextOverlay)
       setAlignmentPoints(pts)
-      setTasks(taskData.tasks || [])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Load failed')
       setOverlay(null)
@@ -243,52 +217,10 @@ export function OfficialMapAndTasksPanel({
     }
   }
 
-  const addTask = async () => {
-    if (!newTaskLabel.trim()) return
-    const res = await fetch(`/api/networks/${networkId}/digitization-tasks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        kind: newTaskKind,
-        label: newTaskLabel.trim(),
-        mapOverlayId: overlay?.id ?? null,
-      }),
-    })
-    const data = await res.json()
-    if (res.ok && data.task) {
-      setTasks((t) => [...t, data.task])
-      setNewTaskLabel('')
-    } else {
-      setError(data.error || 'Could not add task')
-    }
-  }
-
-  const completeTaskWithTrail = async (taskId: string, trailId: string | null) => {
-    const res = await fetch(`/api/digitization-tasks/${taskId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(
-        trailId ? { completedTrailId: trailId } : { clearCompletion: true }
-      ),
-    })
-    const data = await res.json()
-    if (res.ok && data.task) {
-      setTasks((prev) => prev.map((t) => (t.id === taskId ? data.task : t)))
-    }
-  }
-
-  const deleteTask = async (taskId: string) => {
-    const res = await fetch(`/api/digitization-tasks/${taskId}`, { method: 'DELETE' })
-    if (res.ok) {
-      setTasks((prev) => prev.filter((t) => t.id !== taskId))
-      if (pendingDigitizationTask?.id === taskId) onPendingDigitizationTaskChange(null)
-    }
-  }
-
   if (!user) {
     return (
       <p className="text-xs text-muted-foreground">
-        Sign in to upload an official map and manage trace tasks.
+        Sign in to upload an official map.
       </p>
     )
   }
@@ -310,7 +242,7 @@ export function OfficialMapAndTasksPanel({
   return (
     <div className="flex flex-col gap-3 border-t border-border pt-3 mt-1">
       <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Official map & trace tasks
+        Official map
       </p>
 
       {loading && <p className="text-xs text-muted-foreground">Loading…</p>}
@@ -411,101 +343,7 @@ export function OfficialMapAndTasksPanel({
             </>
           )}
 
-          <div className="flex flex-col gap-2">
-            <p className="text-xs font-medium text-foreground">Digitization tasks</p>
-            <div className="flex flex-col gap-1 sm:flex-row sm:items-end">
-              <div className="flex-1 flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Kind</label>
-                <select
-                  className={inputCls}
-                  value={newTaskKind}
-                  onChange={(e) => setNewTaskKind(e.target.value as DigitizationTaskKind)}
-                >
-                  {KIND_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex-[2] flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Label</label>
-                <Input
-                  className={inputCls}
-                  value={newTaskLabel}
-                  onChange={(e) => setNewTaskLabel(e.target.value)}
-                  placeholder="e.g. Yellow triangle loop"
-                />
-              </div>
-              <Button type="button" size="sm" onClick={() => void addTask()}>
-                Add
-              </Button>
-            </div>
 
-            {tasks.length > 0 && (
-              <label className="flex items-center gap-2 cursor-pointer text-xs text-muted-foreground">
-                <input
-                  type="radio"
-                  name="pending-task"
-                  checked={pendingDigitizationTask === null}
-                  onChange={() => onPendingDigitizationTaskChange(null)}
-                  className="accent-primary"
-                />
-                No linked task for next drawn trail
-              </label>
-            )}
-
-            {tasks.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No tasks yet.</p>
-            ) : (
-              <ul className="flex flex-col gap-2 max-h-52 overflow-y-auto">
-                {tasks.map((t) => (
-                  <li
-                    key={t.id}
-                    className="rounded border border-border bg-mud/25 px-2 py-2 text-xs space-y-1.5"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <span className={t.completedTrailId ? 'line-through text-muted-foreground' : ''}>
-                        <span className="font-medium">{t.label}</span>
-                        <span className="text-muted-foreground ml-1">({t.kind})</span>
-                      </span>
-                      <Button type="button" variant="ghost" size="sm" className="h-7 px-1.5" onClick={() => void deleteTask(t.id)}>
-                        ×
-                      </Button>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-muted-foreground">Link trail</label>
-                      <select
-                        className={inputCls}
-                        value={t.completedTrailId ?? ''}
-                        onChange={(e) =>
-                          void completeTaskWithTrail(t.id, e.target.value || null)
-                        }
-                      >
-                        <option value="">— Not done —</option>
-                        {trails.map((tr) => (
-                          <option key={tr.id} value={tr.id}>
-                            {tr.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="pending-task"
-                        checked={pendingDigitizationTask?.id === t.id}
-                        disabled={!!t.completedTrailId}
-                        onChange={() => onPendingDigitizationTaskChange({ id: t.id, label: t.label })}
-                        className="accent-primary"
-                      />
-                      <span>Offer to complete when I save next drawn trail</span>
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
         </>
       )}
     </div>

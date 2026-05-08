@@ -25,8 +25,12 @@ import GetExtensionButton from '@/components/GetExtensionButton'
 import ThemeToggle from '@/components/ThemeToggle'
 import { TrailDetailPanel } from '@/components/trail/TrailDetailPanel'
 import { ActivityFeed } from '@/components/ActivityFeed'
-import { TrailsTabContent } from '@/components/drawer/TrailsTabContent'
-import { NetworksTabContent } from '@/components/drawer/NetworksTabContent'
+import { LibraryTabContent } from '@/components/drawer/LibraryTabContent'
+import { ImportsTabContent, type ImportsTabContentHandle } from '@/components/drawer/ImportsTabContent'
+import { AddTrailSidebar } from '@/components/trail/AddTrailSidebar'
+import { DrawNetworkContent } from '@/components/network/DrawNetworkContent'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faPlus, faXmark } from '@fortawesome/free-solid-svg-icons'
 import { TrailPhotoActionModal } from '@/components/drawer/TrailPhotoActionModal'
 import type { StagedTrailApi } from '@/hooks/useStagedTrail'
 
@@ -39,6 +43,7 @@ interface LeftDrawerProps {
   onHideAllRides: () => void
   onRidesUploaded: (rides: Ride[]) => void
   onSyncComplete: () => Promise<void>
+  onTrailsChanged: () => Promise<void>
   editMode: EditMode
   onEditModeChange: (mode: EditMode) => void
   selectedTrail: Trail | null
@@ -75,8 +80,6 @@ interface LeftDrawerProps {
   staged: StagedTrailApi
   onSaveAddedTrail: (form: TrimFormState, publishOnSave: boolean) => Promise<string | null>
   mapBounds: MapBounds | null
-  showOnMapOnly: boolean
-  onToggleShowOnMapOnly: () => void
   onTrailPhotoCreated: (photo: TrailPhoto) => void
   onEnterAddTrailPhoto: () => void
   /** Public pinned photos (for trail rows + reference). */
@@ -93,8 +96,6 @@ interface LeftDrawerProps {
   onFlyToNetwork: (network: Network) => void
   onOfficialMapLayerChange: (layer: OfficialMapLayerPayload | null) => void
   onAlignmentMapPickChange: (handler: null | ((latlng: [number, number]) => void)) => void
-  pendingDigitizationTask: { id: string; label: string } | null
-  onPendingDigitizationTaskChange: (task: { id: string; label: string } | null) => void
   /** Trail currently being viewed in the detail panel (not editing). */
   viewingTrail: Trail | null
   onOpenViewTrail: (trail: Trail) => void
@@ -102,12 +103,20 @@ interface LeftDrawerProps {
   onEditViewTrail: (trail: Trail) => void
   onSelectActivityItem?: (item: TrailActivityItem) => void
   /** Controlled tab (lifted to parent for URL sync). */
-  tab: 'trails' | 'activity' | 'networks'
-  onTabChange: (tab: 'trails' | 'activity' | 'networks') => void
+  tab: 'map' | 'library' | 'activity' | 'edit'
+  onTabChange: (tab: 'map' | 'library' | 'activity' | 'edit') => void
   /** Photo lightbox state for URL sync. */
   initialPhotoId?: string
   onPhotoOpen?: (photoId: string) => void
   onPhotoClose?: () => void
+  /** Draft trails from imports tab. */
+  onDraftTrailsChange?: (trails: any[], selectedIds: Set<string>) => void
+  onHoverImportTrail?: (osmWayId: string | null) => void
+  importsTabRef?: React.RefObject<ImportsTabContentHandle | null>
+  /** Bbox draw flow for OSM imports. */
+  onStartDrawBbox?: () => void
+  drawBboxCorners?: [number, number][]
+  onClearDrawBbox?: () => void
 }
 
 export default function LeftDrawer({
@@ -119,6 +128,7 @@ export default function LeftDrawer({
   onHideAllRides,
   onRidesUploaded,
   onSyncComplete,
+  onTrailsChanged,
   editMode,
   onEditModeChange,
   selectedTrail,
@@ -155,8 +165,6 @@ export default function LeftDrawer({
   staged,
   onSaveAddedTrail,
   mapBounds,
-  showOnMapOnly,
-  onToggleShowOnMapOnly,
   onTrailPhotoCreated,
   onEnterAddTrailPhoto,
   communityTrailPhotos,
@@ -171,8 +179,6 @@ export default function LeftDrawer({
   onFlyToNetwork,
   onOfficialMapLayerChange,
   onAlignmentMapPickChange,
-  pendingDigitizationTask,
-  onPendingDigitizationTaskChange,
   viewingTrail,
   onOpenViewTrail,
   onCloseViewTrail,
@@ -183,6 +189,12 @@ export default function LeftDrawer({
   initialPhotoId,
   onPhotoOpen,
   onPhotoClose,
+  onDraftTrailsChange,
+  onHoverImportTrail,
+  importsTabRef,
+  onStartDrawBbox,
+  drawBboxCorners,
+  onClearDrawBbox,
 }: LeftDrawerProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
@@ -191,20 +203,22 @@ export default function LeftDrawer({
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
+  const [generateSuggestionsOpen, setGenerateSuggestionsOpen] = useState(false)
   const trailPhotoNeedsMapPin = (p: TrailPhoto) => !p.accepted
 
   const [trailPhotoForAction, setTrailPhotoForAction] = useState<TrailPhoto | null>(null)
   const drawerTab = tab
+  const viewportFilterActive = drawerTab === 'map'
 
   const visibleUnpinnedForPin = useMemo(() => {
     const pending = unpinnedTrailPhotos.filter((p) => trailPhotoNeedsMapPin(p))
-    const activeBounds = showOnMapOnly && mapBounds ? mapBounds : null
+    const activeBounds = viewportFilterActive && mapBounds ? mapBounds : null
     if (!activeBounds) return pending
     return pending.filter((p) => {
       const pt = trailPhotoMapPoint(p)
       return pt != null && pointInBounds(pt, activeBounds)
     })
-  }, [unpinnedTrailPhotos, showOnMapOnly, mapBounds])
+  }, [unpinnedTrailPhotos, viewportFilterActive, mapBounds])
 
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -303,54 +317,25 @@ export default function LeftDrawer({
         {uploadError && <p className="text-xs text-destructive">{uploadError}</p>}
       </div>
 
-      {/* Viewport filter toggle — hidden when viewing trail detail */}
-      {!viewingTrail && (
-      <div className="flex items-center gap-0 border-b-2 border-border px-4 py-2">
-        <button
-          type="button"
-          onClick={() => showOnMapOnly && onToggleShowOnMapOnly()}
-          className={cn(
-            'flex-1 border-2 border-r-0 border-foreground py-1.5 text-xs font-bold uppercase tracking-wide transition-colors',
-            !showOnMapOnly
-              ? 'bg-foreground text-background'
-              : 'bg-card text-muted-foreground hover:bg-mud/80'
-          )}
-        >
-          All data
-        </button>
-        <button
-          type="button"
-          onClick={() => !showOnMapOnly && onToggleShowOnMapOnly()}
-          disabled={!mapBounds}
-          suppressHydrationWarning
-          className={cn(
-            'flex-1 border-2 border-foreground py-1.5 text-xs font-bold uppercase tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-40',
-            showOnMapOnly
-              ? 'bg-foreground text-background'
-              : 'bg-card text-muted-foreground hover:bg-mud/80'
-          )}
-        >
-          On map
-        </button>
-      </div>
-      )}
-
       {/* Tab navigation */}
       <div className="flex border-b-2 border-border">
-        {(['trails', 'activity', 'networks'] as const).map((tab) => (
+        {(['map', 'library', 'activity', 'edit'] as const).map((tab) => (
           <button
             key={tab}
             type="button"
             onClick={() => { onTabChange(tab); if (viewingTrail) onCloseViewTrail() }}
+            disabled={tab === 'map' && !mapBounds}
+            suppressHydrationWarning
             className={cn(
-              'flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors',
+              'flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:cursor-not-allowed disabled:opacity-40',
               !viewingTrail && drawerTab === tab
                 ? 'border-b-2 border-foreground text-foreground -mb-0.5'
                 : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            {tab === 'trails' ? 'Trails' :
-             tab === 'activity' ? 'Activity' : 'Networks'}
+            {tab === 'map' ? 'Map' :
+             tab === 'library' ? 'Library' :
+             tab === 'activity' ? 'Activity' : 'Edit'}
           </button>
         ))}
       </div>
@@ -375,24 +360,29 @@ export default function LeftDrawer({
       {/* Activity tab */}
       {!viewingTrail && drawerTab === 'activity' && (
         <ActivityFeed
-          showOnMapOnly={showOnMapOnly}
-          mapBounds={mapBounds}
           trails={trails}
           onOpenViewTrail={onOpenViewTrail}
           onSelectActivityItem={onSelectActivityItem}
         />
       )}
 
-      {/* Trails tab */}
-      {!viewingTrail && drawerTab === 'trails' && (
-        <TrailsTabContent
+      {/* Map / Library tab — same content; Map filters to viewport */}
+      {!viewingTrail && (drawerTab === 'map' || drawerTab === 'library') && (
+        <LibraryTabContent
+          viewportFilter={drawerTab === 'map'}
+          mapBounds={mapBounds}
           user={user}
           trails={trails}
           networks={networks}
+          draftTrails={draftTrails}
+          hiddenNetworkIds={hiddenNetworkIds}
           editMode={editMode}
           onEditModeChange={onEditModeChange}
           selectedTrail={selectedTrail}
           onSelectTrail={onSelectTrail}
+          selectedNetwork={selectedNetwork}
+          onSelectNetwork={onSelectNetwork}
+          drawNetworkPoints={drawNetworkPoints}
           onSaveEditedTrail={onSaveEditedTrail}
           onSaveAddedTrail={onSaveAddedTrail}
           onDeleteTrail={onDeleteTrail}
@@ -400,48 +390,127 @@ export default function LeftDrawer({
           staged={staged}
           draftSidebarPrefill={draftSidebarPrefill}
           onClearDraftSidebarPrefill={onClearDraftSidebarPrefill}
-          onEnterAddTrailPhoto={onEnterAddTrailPhoto}
-          onTrailPhotoCreated={onTrailPhotoCreated}
-          visibleUnpinnedForPin={visibleUnpinnedForPin}
-          placingTrailPhoto={placingTrailPhoto}
-          onSelectTrailPhotoForAction={setTrailPhotoForAction}
-          showOnMapOnly={showOnMapOnly}
-          mapBounds={mapBounds}
-          onOpenViewTrail={onOpenViewTrail}
-          onFlyToTrail={onFlyToTrail}
-          onFlyToNetwork={onFlyToNetwork}
-          draftTrails={draftTrails}
           onPublishDraft={onPublishDraft}
           onDeleteDraft={onDeleteDraft}
           onEditDraft={onEditDraft}
-        />
-      )}
-
-      {/* Networks tab */}
-      {!viewingTrail && drawerTab === 'networks' && (
-        <NetworksTabContent
-          user={user}
-          trails={trails}
-          networks={networks}
-          hiddenNetworkIds={hiddenNetworkIds}
-          selectedNetwork={selectedNetwork}
-          drawNetworkPoints={drawNetworkPoints}
-          editMode={editMode}
-          onEditModeChange={onEditModeChange}
-          onToggleNetwork={onToggleNetwork}
-          onSelectNetwork={onSelectNetwork}
           onSaveNetwork={onSaveNetwork}
           onUpdateNetwork={onUpdateNetwork}
           onDeleteNetwork={onDeleteNetwork}
           onStartRedrawNetwork={onStartRedrawNetwork}
+          onToggleNetwork={onToggleNetwork}
           onFlyToNetwork={onFlyToNetwork}
           onOfficialMapLayerChange={onOfficialMapLayerChange}
           onAlignmentMapPickChange={onAlignmentMapPickChange}
-          pendingDigitizationTask={pendingDigitizationTask}
-          onPendingDigitizationTaskChange={onPendingDigitizationTaskChange}
-          showOnMapOnly={showOnMapOnly}
-          mapBounds={mapBounds}
+          onEnterAddTrailPhoto={onEnterAddTrailPhoto}
+          onTrailPhotoCreated={onTrailPhotoCreated}
+          onOpenViewTrail={onOpenViewTrail}
+          onFlyToTrail={onFlyToTrail}
         />
+      )}
+
+      {/* Edit tab — add trail, add network, import suggestions */}
+      {!viewingTrail && drawerTab === 'edit' && (
+        <div className="flex flex-col">
+          {/* Add trail */}
+          <div className="flex flex-col gap-2 border-b-2 border-border px-4 py-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-display text-xs font-normal uppercase tracking-[0.15em] text-muted-foreground">
+                Add trail
+              </h2>
+              {user && (
+                <button
+                  type="button"
+                  onClick={() => onEditModeChange(editMode === 'add-trail' ? null : 'add-trail')}
+                  title={editMode === 'add-trail' ? 'Cancel' : 'Add trail'}
+                  className={`flex size-6 items-center justify-center rounded-sm border-2 transition-colors ${
+                    editMode === 'add-trail'
+                      ? 'border-foreground bg-primary text-primary-foreground'
+                      : 'border-border text-muted-foreground hover:bg-mud/80'
+                  }`}
+                >
+                  <FontAwesomeIcon icon={editMode === 'add-trail' ? faXmark : faPlus} className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            {editMode === 'add-trail' && (
+              <AddTrailSidebar
+                staged={staged}
+                onSave={onSaveAddedTrail}
+                onCancel={() => onEditModeChange(null)}
+                networks={networks}
+                canPublish={!!user}
+                draftPrefill={draftSidebarPrefill}
+                onClearDraftPrefill={onClearDraftSidebarPrefill}
+              />
+            )}
+          </div>
+
+          {/* Add network */}
+          <div className="flex flex-col gap-2 border-b-2 border-border px-4 py-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-display text-xs font-normal uppercase tracking-[0.15em] text-muted-foreground">
+                Add network
+              </h2>
+              {user && (
+                <button
+                  type="button"
+                  onClick={() => onEditModeChange(editMode === 'add-network' ? null : 'add-network')}
+                  title={editMode === 'add-network' ? 'Cancel' : 'Add network'}
+                  className={`flex size-6 items-center justify-center rounded-sm border-2 transition-colors ${
+                    editMode === 'add-network'
+                      ? 'border-foreground bg-primary text-primary-foreground'
+                      : 'border-border text-muted-foreground hover:bg-mud/80'
+                  }`}
+                >
+                  <FontAwesomeIcon icon={editMode === 'add-network' ? faXmark : faPlus} className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            {editMode === 'add-network' && (
+              <DrawNetworkContent
+                trails={trails}
+                drawNetworkPoints={drawNetworkPoints}
+                selectedNetwork={selectedNetwork}
+                onSave={onSaveNetwork}
+                onUpdate={onUpdateNetwork}
+                onCancel={() => onEditModeChange(null)}
+              />
+            )}
+          </div>
+
+          {/* Generate suggestions */}
+          <div className="flex flex-col gap-2 border-b-2 border-border px-4 py-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-display text-xs font-normal uppercase tracking-[0.15em] text-muted-foreground">
+                Generate suggestions
+              </h2>
+              <button
+                type="button"
+                onClick={() => setGenerateSuggestionsOpen((prev) => !prev)}
+                title={generateSuggestionsOpen ? 'Close suggestions' : 'Generate suggestions'}
+                className={`flex size-6 items-center justify-center rounded-sm border-2 transition-colors ${
+                  generateSuggestionsOpen
+                    ? 'border-foreground bg-primary text-primary-foreground'
+                    : 'border-border text-muted-foreground hover:bg-mud/80'
+                }`}
+              >
+                <FontAwesomeIcon icon={generateSuggestionsOpen ? faXmark : faPlus} className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            {generateSuggestionsOpen && (
+              <ImportsTabContent
+                ref={importsTabRef}
+                user={user}
+                onApprovedImport={onTrailsChanged}
+                onDraftTrailsChange={onDraftTrailsChange}
+                onHoverImportTrail={onHoverImportTrail}
+                onStartDrawBbox={onStartDrawBbox}
+                drawBboxCorners={drawBboxCorners}
+                onClearDrawBbox={onClearDrawBbox}
+              />
+            )}
+          </div>
+        </div>
       )}
 
       </div>{/* end scrollable content area */}
