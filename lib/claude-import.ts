@@ -113,8 +113,10 @@ export async function rankOsmTrails(
       tags: pickRelevantTags(t.tags),
     };
   });
-  console.log(`[Claude import] Sending ${osmTrails.length} ways to Claude for grouping and ranking`);
-  console.log(`[Claude import] System prompt preview: ${SYSTEM_PROMPT_CACHED.substring(0, 200)}...`);
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[Claude import] Sending ${osmTrails.length} ways to Claude for grouping and ranking`);
+    console.log(`[Claude import] System prompt preview: ${SYSTEM_PROMPT_CACHED.substring(0, 200)}...`);
+  }
 
   try {
     const response = await anthropic.messages.create({

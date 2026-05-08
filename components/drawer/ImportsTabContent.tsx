@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useImperativeHandle, forwardRef } from 'react'
+import { useState, useEffect, useImperativeHandle, useRef, forwardRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import type { SessionUser } from '@/lib/auth'
@@ -88,6 +88,7 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
   const [expandGenerateForm, setExpandGenerateForm] = useState(true)
   const [analyzeFormDraftId, setAnalyzeFormDraftId] = useState<string | null>(null)
   const [analyzeInstructions, setAnalyzeInstructions] = useState('')
+  const previousExpandedDraftIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!user) {
@@ -111,14 +112,40 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
   }, [drafts])
 
   useEffect(() => {
-    // Clear selectedTrailIds when expanding a different draft
-    if (expandedDraftId !== null) {
-      const currentDraft = drafts.find((d) => d.id === expandedDraftId)
-      if (currentDraft) {
-        setSelectedTrailIds(new Set())
-      }
+    // Reset selection only when switching directly between two expanded drafts.
+    // Skip collapse/expand transitions so re-expanding can keep any still-valid
+    // selections via the prune effect below. Intentionally not depending on
+    // `drafts` — optimistic in-place edits (e.g. saveEditTrail) update `drafts`
+    // and would otherwise wipe the current selection mid-review.
+    const previousExpandedDraftId = previousExpandedDraftIdRef.current
+    if (
+      previousExpandedDraftId !== null &&
+      expandedDraftId !== null &&
+      previousExpandedDraftId !== expandedDraftId
+    ) {
+      setSelectedTrailIds(new Set())
     }
-  }, [expandedDraftId, drafts])
+    previousExpandedDraftIdRef.current = expandedDraftId
+  }, [expandedDraftId])
+
+  useEffect(() => {
+    // When the expanded draft's trails change (e.g. analyzeWithClaude refetch),
+    // drop any selected ids that no longer exist so the "Import N trails"
+    // count stays accurate and the approve API never receives stale ids.
+    if (!expandedDraftId) return
+    const expandedDraft = drafts.find((d) => d.id === expandedDraftId)
+    if (!expandedDraft) return
+    const validIds = new Set(expandedDraft.trails.map((t) => t.osmWayId))
+    setSelectedTrailIds((prev) => {
+      let changed = false
+      const next = new Set<string>()
+      for (const id of prev) {
+        if (validIds.has(id)) next.add(id)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [drafts, expandedDraftId])
 
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
@@ -978,6 +1005,19 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
                 </div>
               )}
 
+              {/* Approve button */}
+              <Button
+                onClick={() => handleApproveDraft(draft.id)}
+                disabled={selectedTrailIds.size === 0 || approving}
+                className="mb-3 w-full"
+              >
+                {approving ? (
+                  'Importing...'
+                ) : (
+                  `Import ${selectedTrailIds.size} ${selectedTrailIds.size === 1 ? 'trail' : 'trails'}`
+                )}
+              </Button>
+
               {/* Trail list */}
               <div className="flex-1 min-h-0 space-y-2 overflow-y-auto">
                 {[...draft.trails]
@@ -1124,19 +1164,6 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
                     )
                   })}
               </div>
-
-              {/* Approve button */}
-              <Button
-                onClick={() => handleApproveDraft(draft.id)}
-                disabled={selectedTrailIds.size === 0 || approving}
-                className="mt-4 w-full"
-              >
-                {approving ? (
-                  'Importing...'
-                ) : (
-                  `Import ${selectedTrailIds.size} ${selectedTrailIds.size === 1 ? 'trail' : 'trails'}`
-                )}
-              </Button>
 
               {/* Claude usage info */}
               {draft.aiAnalyzed && (

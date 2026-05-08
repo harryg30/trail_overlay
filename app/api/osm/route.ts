@@ -44,7 +44,9 @@ function buildOverpassQuery(
 }
 
 async function fetchOverpass(key: string, query: string): Promise<unknown> {
-  console.log('[Overpass] Query:', query.slice(0, 200))
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[Overpass] Query:', query.slice(0, 200))
+  }
 
   const res = await fetch(OVERPASS_ENDPOINT, {
     method: 'POST',
@@ -55,9 +57,11 @@ async function fetchOverpass(key: string, query: string): Promise<unknown> {
     },
   })
 
-  console.log('[Overpass] Response status:', res.status)
   const text = await res.text()
-  console.log('[Overpass] Response body:', text.slice(0, 200))
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[Overpass] Response status:', res.status)
+    console.log('[Overpass] Response body:', text.slice(0, 200))
+  }
 
   if (!res.ok) {
     const code = classifyOverpassFailure(res.status, text)
@@ -92,20 +96,17 @@ async function fetchOverpass(key: string, query: string): Promise<unknown> {
   return data
 }
 
+const isDev = process.env.NODE_ENV === 'development'
+
 export async function GET(request: NextRequest) {
   try {
-    console.log('[OSM GET] Handler start')
-
     const sp = request.nextUrl.searchParams
     const south = Number(sp.get('south'))
     const west = Number(sp.get('west'))
     const north = Number(sp.get('north'))
     const east = Number(sp.get('east'))
 
-    console.log('[OSM GET] Received request with bbox:', { south, west, north, east })
-
     if ([south, west, north, east].some((v) => !Number.isFinite(v))) {
-      console.log('[OSM GET] Invalid bbox')
       return NextResponse.json({ error: 'Invalid bbox' }, { status: 400 })
     }
 
@@ -113,14 +114,11 @@ export async function GET(request: NextRequest) {
       ? sp.get('filters')!.split(',').filter(Boolean)
       : DEFAULT_FILTERS
 
-    console.log('[OSM GET] Filters:', filters)
-
     const key = buildCacheKey(south, west, north, east, filters)
 
     // 1. Serve from cache
     const cached = cache.get(key)
     if (cached && cached.expiresAt > Date.now()) {
-      console.log('[OSM GET] Serving from cache')
       return NextResponse.json(cached.data, {
         headers: { 'X-Cache': 'HIT' },
       })
@@ -131,24 +129,19 @@ export async function GET(request: NextRequest) {
       let promise = inflight.get(key)
       let coalesced = false
       if (!promise) {
-        console.log('[OSM GET] Building query')
         const query = buildOverpassQuery(south, west, north, east, filters)
-        console.log('[OSM GET] Query built:', query.slice(0, 150))
+        if (isDev) console.log('[OSM GET] Query:', query.slice(0, 150))
         promise = fetchOverpass(key, query)
         inflight.set(key, promise)
       } else {
-        console.log('[OSM GET] Coalescing with existing request')
         coalesced = true
       }
 
-      console.log('[OSM GET] Awaiting Overpass response')
       const data = await promise
-      console.log('[OSM GET] Got Overpass data')
       return NextResponse.json(data, {
         headers: { 'X-Cache': coalesced ? 'COALESCED' : 'MISS' },
       })
     } catch (err) {
-      console.error('[OSM GET] Error in main flow:', err)
       throw err
     } finally {
       inflight.delete(key)

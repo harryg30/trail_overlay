@@ -1,7 +1,12 @@
 {
-  "updatedAt": "2026-04-15T00:00:00.000Z",
-  "headline": "Welcome to Trail Overlay",
+  "updatedAt": "2026-05-08T00:00:00.000Z",
+  "headline": "AI Trail Suggestions",
   "whatsNew": [
+    {
+      "title": "AI trail suggestions",
+      "summary": "Trail Overlay now suggests trails to import based on OpenStreetMap data for your area. Claude evaluates and ranks them so you can get started without manually hunting down every trail.",
+      "screenshotUrl": ""
+    },
     {
       "title": "Version history",
       "summary": "Every trail edit is now versioned — browse the full history of changes and restore any previous version.",

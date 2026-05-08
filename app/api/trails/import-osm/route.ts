@@ -100,13 +100,14 @@ async function processImportInBackground(
   regionName: string,
   filters: any
 ) {
-  console.log('[Import OSM BG] Starting background processing for draft:', draftId)
-  console.log('[Import OSM BG] Bbox:', { south, west, north, east })
+  const isDev = process.env.NODE_ENV === 'development'
+  if (isDev) console.log('[Import OSM BG] Starting background processing for draft:', draftId)
+  if (isDev) console.log('[Import OSM BG] Bbox:', { south, west, north, east })
 
   try {
     // Derive baseUrl from environment, with validation
     // In development, always use localhost even if NEXT_PUBLIC_APP_URL is set
-    let baseUrl = process.env.NODE_ENV === 'development'
+    let baseUrl = isDev
       ? 'http://localhost:3000'
       : (process.env.NEXT_PUBLIC_APP_URL?.trim() ||
          (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'));
@@ -114,7 +115,7 @@ async function processImportInBackground(
     baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
 
     const osmUrl = `${baseUrl}/api/osm?south=${south}&west=${west}&north=${north}&east=${east}&filters=path,track,cycleway`;
-    console.log('[Import OSM BG] Calling OSM endpoint:', osmUrl)
+    if (isDev) console.log('[Import OSM BG] Calling OSM endpoint:', osmUrl)
 
     let osmResponse;
     try {
@@ -128,7 +129,7 @@ async function processImportInBackground(
       return;
     }
 
-    console.log('[Import OSM BG] OSM API response status:', osmResponse.status)
+    if (isDev) console.log('[Import OSM BG] OSM API response status:', osmResponse.status)
 
     if (!osmResponse.ok) {
       const errorData = await osmResponse.json().catch(() => ({}));
@@ -152,9 +153,12 @@ async function processImportInBackground(
     const filteredTrails = filterOsmTrails(osmElements, filters);
 
     // Convert OSM elements to polylines and prepare for deduplication
+    let droppedMissingNodes = 0;
     const trailsWithPolylines = filteredTrails
       .map((el) => {
-        const polyline = extractPolyline(el, nodeIndex);
+        const polyline = extractPolyline(el, nodeIndex, () => {
+          droppedMissingNodes += 1;
+        });
         if (!polyline || polyline.length < 2) return null;
 
         return {
@@ -170,6 +174,16 @@ async function processImportInBackground(
         };
       })
       .filter((t) => t !== null);
+
+    if (droppedMissingNodes > 0) {
+      // Surface this in production: missing nodes usually indicate an Overpass
+      // query that returned ways without their referenced nodes (truncation,
+      // bbox edge effects). We always log a single summary so real upstream
+      // issues stay diagnosable, even when per-way dev warnings are off.
+      console.warn(
+        `[Import OSM BG] Dropped ${droppedMissingNodes} ways with missing node references for draft ${draftId}`
+      );
+    }
 
     // PostGIS spatial deduplication
     const duplicateMap = await bulkFindDuplicates(trailsWithPolylines, {
@@ -265,7 +279,8 @@ function filterOsmTrails(elements: any[], filters: any): any[] {
 
 function extractPolyline(
   element: any,
-  nodeIndex: Map<number, { lat: number; lon: number }>
+  nodeIndex: Map<number, { lat: number; lon: number }>,
+  onMissingNode?: () => void
 ): [number, number][] | null {
   // If geometry is already included (some Overpass queries include it)
   if (element.geometry && Array.isArray(element.geometry)) {
@@ -281,7 +296,8 @@ function extractPolyline(
   for (const nodeId of element.nodes) {
     const node = nodeIndex.get(nodeId);
     if (!node) {
-      console.warn(`[Import] Missing node ${nodeId} for way ${element.id}`);
+      onMissingNode?.();
+      if (process.env.NODE_ENV === 'development') console.warn(`[Import] Missing node ${nodeId} for way ${element.id}`);
       return null; // Missing node data, skip this way
     }
     polyline.push([node.lat, node.lon]);
