@@ -111,12 +111,34 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
   }, [drafts])
 
   useEffect(() => {
-    // Clear selectedTrailIds when expanding a different draft.
-    // Intentionally not depending on `drafts` — optimistic in-place edits
-    // (e.g. saveEditTrail) update `drafts` and would otherwise wipe the
-    // current selection mid-review.
-    setSelectedTrailIds(new Set())
+    // Reset selection when switching to a different draft. Skip when collapsing
+    // (id -> null) so re-expanding via the prune effect below keeps any
+    // still-valid selections intact. Intentionally not depending on `drafts` —
+    // optimistic in-place edits (e.g. saveEditTrail) update `drafts` and would
+    // otherwise wipe the current selection mid-review.
+    if (expandedDraftId !== null) {
+      setSelectedTrailIds(new Set())
+    }
   }, [expandedDraftId])
+
+  useEffect(() => {
+    // When the expanded draft's trails change (e.g. analyzeWithClaude refetch),
+    // drop any selected ids that no longer exist so the "Import N trails"
+    // count stays accurate and the approve API never receives stale ids.
+    if (!expandedDraftId) return
+    const expandedDraft = drafts.find((d) => d.id === expandedDraftId)
+    if (!expandedDraft) return
+    const validIds = new Set(expandedDraft.trails.map((t) => t.osmWayId))
+    setSelectedTrailIds((prev) => {
+      let changed = false
+      const next = new Set<string>()
+      for (const id of prev) {
+        if (validIds.has(id)) next.add(id)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [drafts, expandedDraftId])
 
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
