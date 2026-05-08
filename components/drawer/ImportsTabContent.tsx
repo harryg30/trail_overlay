@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useImperativeHandle, forwardRef } from 'react'
+import { useState, useEffect, useImperativeHandle, useRef, forwardRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import type { SessionUser } from '@/lib/auth'
@@ -88,6 +88,7 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
   const [expandGenerateForm, setExpandGenerateForm] = useState(true)
   const [analyzeFormDraftId, setAnalyzeFormDraftId] = useState<string | null>(null)
   const [analyzeInstructions, setAnalyzeInstructions] = useState('')
+  const previousExpandedDraftIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!user) {
@@ -111,14 +112,20 @@ export const ImportsTabContent = forwardRef<ImportsTabContentHandle, ImportsTabC
   }, [drafts])
 
   useEffect(() => {
-    // Reset selection when switching to a different draft. Skip when collapsing
-    // (id -> null) so re-expanding via the prune effect below keeps any
-    // still-valid selections intact. Intentionally not depending on `drafts` —
-    // optimistic in-place edits (e.g. saveEditTrail) update `drafts` and would
-    // otherwise wipe the current selection mid-review.
-    if (expandedDraftId !== null) {
+    // Reset selection only when switching directly between two expanded drafts.
+    // Skip collapse/expand transitions so re-expanding can keep any still-valid
+    // selections via the prune effect below. Intentionally not depending on
+    // `drafts` — optimistic in-place edits (e.g. saveEditTrail) update `drafts`
+    // and would otherwise wipe the current selection mid-review.
+    const previousExpandedDraftId = previousExpandedDraftIdRef.current
+    if (
+      previousExpandedDraftId !== null &&
+      expandedDraftId !== null &&
+      previousExpandedDraftId !== expandedDraftId
+    ) {
       setSelectedTrailIds(new Set())
     }
+    previousExpandedDraftIdRef.current = expandedDraftId
   }, [expandedDraftId])
 
   useEffect(() => {
